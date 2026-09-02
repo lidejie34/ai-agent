@@ -1,0 +1,20 @@
+# 复制为 application-local.yml 后填入真实值；application-local.yml 已被 .gitignore 忽略
+# 启动：mvn spring-boot:run -Dspring-boot.run.profiles=local
+# （也可不复制，直接用环境变量 ARK_API_KEY / ARK_CHAT_MODEL 注入）
+spring:
+  ai:
+    openai:
+      api-key: ark-在此填入你的APIKey
+      chat:
+        options:
+          model: 在此填入方舟控制台确认的模型或接入点ID
+          # 思考链开关：none=关闭（快，默认）；high=开启深度推理（慢）
+          # Coding Plan 实测可用模型：doubao-seed-2-1-turbo-260628 /
+          #   doubao-seed-2-0-code-preview-260215 / deepseek-v4-pro-ga-260813 /
+          #   deepseek-v4-flash-ga-260731 / glm-5-2-260617
+          reasoning-effort: none
+
+# 可选：打开调试日志（打印消息内容与 SSE 每个片段）
+# logging:
+#   level:
+#     com.dj.ai.agentchat: debug

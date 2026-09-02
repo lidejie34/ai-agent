@@ -1,0 +1,75 @@
+server:
+  port: 8080
+
+logging:
+  level:
+    # 本工程日志级别：info=请求/耗时/异常摘要；debug=额外打印消息内容与 SSE 每个片段
+    # 可用环境变量覆盖：APP_LOG_LEVEL=debug
+    com.dj.ai.agentchat: ${APP_LOG_LEVEL:info}
+
+spring:
+  application:
+    name: dj-agent-chat
+
+  # ---- Spring AI / 火山方舟（配置 key 已经 M7 jar 构建期核验）----
+  ai:
+    openai:
+      # 方舟 Coding Plan OpenAI 兼容端点
+      base-url: https://ark.cn-beijing.volces.com/api/coding/v3
+      # 密钥外置：环境变量优先。
+      # 构建期核验（M7 jar 实测）：M7 各 OpenAI 模型自动配置在 bean 创建期断言 api-key 非空白，
+      # 空字符串会导致上下文启动失败（"OpenAI API key must be set ..."）。
+      # 故默认值使用明显非法的占位串（不是真实凭证、不会被发出：ChatService 调用前检测到
+      # 该占位值即按「未配置」处理：同步 503 / 流式 error 事件）；设置 ARK_API_KEY 后覆盖。
+      api-key: ${ARK_API_KEY:ark-placeholder-not-configured}
+      chat:
+        # M7 默认拼接 /v1/chat/completions；方舟 coding 端点最终 URL 必须为
+        # https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions，
+        # 故覆写为 /chat/completions（已经 Spring 6.2 DefaultUriBuilderFactory 离线验证为路径追加）。
+        # 【联调首验项】：若方舟实际路径不同，按联调返回的 404/400 调整；
+        # 备选配法：base-url=https://ark.cn-beijing.volces.com/api/coding + completions-path=/v3/chat/completions
+        completions-path: /chat/completions
+        options:
+          # 模型/接入点 ID 完全由配置决定，代码不硬编码（AC-7）
+          model: ${ARK_CHAT_MODEL:}
+          temperature: 0.7
+          # 推理模型思考链开关（方舟实测认 reasoning_effort 参数）：
+          # none=关闭思考，简单对话快（实测 4.6s→1.1s）；需要深度推理时设 high 或删掉此行走模型默认。
+          # 可用环境变量 ARK_REASONING_EFFORT=high 覆盖。
+          reasoning-effort: ${ARK_REASONING_EFFORT:none}
+
+  # ---- 存储预留 1/3：MySQL（HikariCP；本期不连库、不建表）----
+  datasource:
+    url: jdbc:mysql://127.0.0.1:13306/dj_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 关键：关闭 Hikari 启动时快速失败连接探测，保证 MySQL 不可达也能启动（AC-2）
+      initialization-fail-timeout: -1
+      pool-name: DjAgentHikariPool
+
+  # ---- 存储预留 2/3：Redis（Lettuce 原生懒连接，首条命令才建连）----
+  # 注：构建期核验发现 Boot 3.4 下 lettuce.pool.enabled=true 但 classpath 无
+  # commons-pool2 会在上下文刷新期抛 NoClassDefFoundError，故本期不开启连接池
+  # （本期不使用 Redis，连接池无关；后续启用 Redis 时再引入 commons-pool2 并开启）。
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 16379
+      database: 0
+      timeout: 3s
+
+# ---- 存储预留 3/3：Postgres（后续 pgvector/RAG）----
+# 自定义命名空间，不绑定任何 Spring 自动配置，仅作连接参数预留；
+# 后续启用多数据源时迁移为自定义 DataSource bean 配置。
+app:
+  storage:
+    postgres:
+      url: jdbc:postgresql://127.0.0.1:15432/dj_agent_vec
+      username: postgres
+      password: postgres
+      driver-class-name: org.postgresql.Driver
+  chat:
+    # SSE 流超时时间（毫秒）
+    sse-timeout-ms: 120000
