@@ -102,8 +102,23 @@ public class RequestLoggingAdvisor implements CallAroundAdvisor, StreamAroundAdv
 
     // ---------------- 内部 ----------------
 
+    /**
+     * 统计本次调用实际发往模型的消息总数。
+     *
+     * <p>M7 字节码实证（{@code DefaultChatClient.toAdvisedRequest}）：{@code .messages(...)}
+     * 传入列表的<b>最后一条 UserMessage 会被提升为 {@code userText} 并从 messages 移除</b>，
+     * 故 Advisor 视角：{@code messages()} = 历史消息（不含本轮），{@code userText()} = 本轮用户消息，
+     * {@code systemText()} = 系统提示（toPrompt 时渲染为 SystemMessage）。三者相加才是真实消息数。
+     */
     private static int messageCount(AdvisedRequest request) {
-        return request.messages() == null ? 0 : request.messages().size();
+        int count = request.messages() == null ? 0 : request.messages().size();
+        if (request.userText() != null && !request.userText().isBlank()) {
+            count++;
+        }
+        if (request.systemText() != null && !request.systemText().isBlank()) {
+            count++;
+        }
+        return count;
     }
 
     private String resolveModel(AdvisedRequest request) {

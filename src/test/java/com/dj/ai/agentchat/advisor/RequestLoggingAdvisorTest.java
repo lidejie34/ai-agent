@@ -56,11 +56,25 @@ class RequestLoggingAdvisorTest {
         advisorLogger.detachAppender(appender);
     }
 
+    /**
+     * 构造 M7 真实形态的 AdvisedRequest：{@code .messages(...)} 的最后一条 UserMessage
+     * 已被 DefaultChatClient.toAdvisedRequest 提升为 userText 并从 messages 移除，
+     * 故 messages 只放历史消息；history 为 null 表示单轮（messages 为空）。
+     */
     private AdvisedRequest request(String userText, String optionsModel) {
+        return request(userText, optionsModel, null, null);
+    }
+
+    private AdvisedRequest request(String userText, String optionsModel,
+                                   List<org.springframework.ai.chat.messages.Message> history,
+                                   String systemText) {
         AdvisedRequest.Builder builder = AdvisedRequest.builder()
                 .chatModel(mock(org.springframework.ai.chat.model.ChatModel.class))
                 .userText(userText)
-                .messages(List.of(new UserMessage(userText)));
+                .messages(history == null ? List.of() : history);
+        if (systemText != null) {
+            builder.systemText(systemText);
+        }
         if (optionsModel != null) {
             builder.chatOptions(OpenAiChatOptions.builder().model(optionsModel).build());
         }
@@ -103,6 +117,24 @@ class RequestLoggingAdvisorTest {
                 // debug 级只打长度，不打正文（密钥随正文一起被挡住）
                 .anyMatch(msg -> msg.contains("userText长度=") && !msg.contains(FAKE_SECRET));
         assertNoSecretLeak();
+    }
+
+    @Test
+    void call_multiTurnWithSystemPrompt_countsHistoryPlusUserPlusSystem() {
+        // M7 形态：messages=历史（本轮 user 已被提升为 userText），systemText 非空
+        List<org.springframework.ai.chat.messages.Message> history = List.of(
+                new UserMessage("我叫小明"),
+                new AssistantMessage("你好，小明！"));
+        RequestLoggingAdvisor advisor = new RequestLoggingAdvisor("fallback-model");
+        CallAroundAdvisorChain chain = mock(CallAroundAdvisorChain.class);
+        when(chain.nextAroundCall(any())).thenReturn(advisedResponse("小明你好"));
+
+        advisor.aroundCall(
+                request("我叫什么？", "options-model", history, "你是测试助手"), chain);
+
+        // 2 历史 + 1 本轮 user + 1 system = 4；单轮无历史场景（其余用例）userText=1
+        assertThat(allLogs())
+                .anyMatch(msg -> msg.contains("模型调用开始[call]") && msg.contains("消息数=4"));
     }
 
     @Test
