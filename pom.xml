@@ -61,6 +61,23 @@
             <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
 
+        <!-- 迭代2：同步模型调用路径（RestClient）显式连接池——Apache HttpClient5。
+             版本由 Spring Boot 3.4.0 BOM 管理（httpclient5 5.4.1 / httpcore5 5.3.1），不写 version。 -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
+
+        <!-- 迭代2：流式模型调用路径（WebClient）显式连接池——Reactor Netty。
+             spring-webflux 已由 spring-ai-retry 传递引入，但 reactor-netty 未传递
+             （缺失时 WebClient 回退 JDK HttpClient 连接器、无池），故显式声明。
+             仅加 reactor-netty-http（reactor-netty-core 由其传递）；不引 spring-boot-starter-webflux
+             （保持 Servlet MVC 栈）。版本由 Boot reactor-bom 2024.0.0 管理（reactor-netty 1.2.x）。 -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+        </dependency>
+
         <!-- 存储预留：MySQL（本期不连、不建表） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

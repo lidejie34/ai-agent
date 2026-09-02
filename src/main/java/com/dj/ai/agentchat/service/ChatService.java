@@ -11,13 +11,20 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
+import reactor.util.retry.Retry;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 对话服务（厚层）：请求校验、多轮消息组装、ChatClient 同步/流式调用、异常归一。
@@ -40,13 +47,31 @@ public class ChatService {
     private final ChatClient chatClient;
     private final String apiKey;
     private final String configuredModel;
+    /** 流式首片段前重试：最大尝试次数（含首次，与同步 RetryTemplate 一致为 3）。 */
+    private final int streamRetryMaxAttempts;
+    private final Duration streamRetryMinBackoff;
+    private final Duration streamRetryMaxBackoff;
 
+    @Autowired
     public ChatService(ChatClient chatClient,
                        @Value("${spring.ai.openai.api-key:}") String apiKey,
-                       @Value("${spring.ai.openai.chat.options.model:}") String configuredModel) {
+                       @Value("${spring.ai.openai.chat.options.model:}") String configuredModel,
+                       @Value("${app.chat.retry.stream.max-attempts:3}") int streamRetryMaxAttempts,
+                       @Value("${app.chat.retry.stream.min-backoff:1s}") Duration streamRetryMinBackoff,
+                       @Value("${app.chat.retry.stream.max-backoff:10s}") Duration streamRetryMaxBackoff) {
         this.chatClient = chatClient;
         this.apiKey = apiKey;
         this.configuredModel = configuredModel;
+        this.streamRetryMaxAttempts = streamRetryMaxAttempts;
+        this.streamRetryMinBackoff = streamRetryMinBackoff;
+        this.streamRetryMaxBackoff = streamRetryMaxBackoff;
+    }
+
+    /**
+     * 测试/便捷构造（与迭代 1 签名兼容）：流式重试退避取毫秒级，离线测试快速确定、不真实等待。
+     */
+    public ChatService(ChatClient chatClient, String apiKey, String configuredModel) {
+        this(chatClient, apiKey, configuredModel, 3, Duration.ofMillis(10), Duration.ofMillis(100));
     }
 
     /**
@@ -81,13 +106,58 @@ public class ChatService {
         List<Message> messages = buildMessages(request);
         log.debug("流式调用模型: 消息总数={}, 配置model={}", messages.size(), configuredModel);
         try {
-            return chatClient.prompt().messages(messages).stream().content()
+            // 边界说明（M7 实证）：
+            // 1) Spring AI 的 RetryTemplate 只覆盖同步 internalCall，流式 internalStream/stream
+            //    不引用 RetryTemplate；此处仅在应用层对「建连/首片段前」的瞬时故障（429/5xx/网络 IO）
+            //    有限重试；首片段发出后流中断不重放（避免内容重复），直接下传 error 事件由控制器结束流；
+            //    卡死靠心跳发现 + Netty responseTimeout 兜底。
+            // 2) M7 DefaultAroundAdvisorChain 的 Advisor 队列有状态（逐次 pop），同一 Flux 重订阅会
+            //    抛 "No AroundAdvisor available to execute"，故整个 ChatClient 流式装配必须包在
+            //    Flux.defer 中：每次（重）订阅都重建 Advisor 链并重新调用模型（重试才真正生效）。
+            Flux<String> deferred = Flux.defer(
+                    () -> chatClient.prompt().messages(messages).stream().content());
+            return withFirstChunkRetry(deferred)
                     .onErrorMap(RuntimeException.class,
                             e -> (e instanceof ModelCallException) ? e : new ModelCallException(STREAM_FAILED_MESSAGE, e));
         } catch (RuntimeException e) {
             log.warn("流式装配异常: {}", e.getMessage());
             throw new ModelCallException(STREAM_FAILED_MESSAGE, e);
         }
+    }
+
+    /**
+     * 首片段前有限重试：{@code emitted} 标记是否已向调用方发出过片段；
+     * 谓词严格限定「未发出任何片段 且 异常为 429/5xx（WebClientResponseException）或网络/IO 类」。
+     */
+    private Flux<String> withFirstChunkRetry(Flux<String> content) {
+        AtomicBoolean emitted = new AtomicBoolean(false);
+        long retryCount = Math.max(0, streamRetryMaxAttempts - 1L);
+        return content
+                .doOnNext(chunk -> emitted.set(true))
+                .retryWhen(Retry.backoff(retryCount, streamRetryMinBackoff)
+                        .maxBackoff(streamRetryMaxBackoff)
+                        .filter(error -> isRetryableStreamError(error, emitted)));
+    }
+
+    private static boolean isRetryableStreamError(Throwable error, AtomicBoolean emitted) {
+        if (emitted.get()) {
+            return false;
+        }
+        if (error instanceof WebClientResponseException clientError) {
+            int status = clientError.getStatusCode().value();
+            // 429 限流与 5xx 服务端错误可重试；其余 4xx（400/401/404…）立即失败，与同步分类一致
+            return status == 429 || clientError.getStatusCode().is5xxServerError();
+        }
+        // 网络层故障（连接拒绝/读超时/连接重置）：沿 cause 链识别 IO/资源类异常
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IOException || cause instanceof ResourceAccessException) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return false;
     }
 
     // ---- 内部 ----

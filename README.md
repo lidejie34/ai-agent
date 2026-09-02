@@ -48,9 +48,12 @@ curl -X POST http://localhost:8080/api/chat \
   -d '{"message":"用一句话介绍你自己"}'
 
 # 6) 流式问答（-N 关闭缓冲，观察逐段输出，最后以 event:done / [DONE] 结束）
+#    迭代2：模型思考空闲期每 15s 会收到一行 ":keepalive" 注释帧（EventSource 标准忽略，
+#    curl 中可见；模型开始出片段后计时重置），用于防网关/浏览器空闲断连。
 curl -N -X POST http://localhost:8080/api/chat/stream \
   -H 'Content-Type: application/json' \
   -d '{"message":"从 1 数到 5，每个数字单独说"}'
+#    可用 APP_CHAT_HEARTBEAT_INTERVAL 改间隔（如 5s 便于观察）、APP_CHAT_HEARTBEAT_ENABLED=false 关闭。
 
 # 7) 多轮上下文（带 history 追问，回答应体现上下文）
 curl -X POST http://localhost:8080/api/chat \
@@ -78,14 +81,25 @@ mvn clean package -DskipTests # 编译打包（target/dj-agent-chat-0.0.1-SNAPSH
 ```
 src/main/java/com/dj/ai/agentchat/
 ├── DjAgentChatApplication.java        # 启动类
-├── controller/ChatController.java     # POST /api/chat、/api/chat/stream（SSE 编排）
-├── service/ChatService.java           # 参数校验、多轮消息组装、ChatClient 同步/流式调用、异常归一
-├── config/ChatClientConfig.java       # 由自动配置的 ChatClient.Builder 装配 ChatClient
+├── controller/ChatController.java     # POST /api/chat、/api/chat/stream（SSE 编排 + 心跳）
+├── service/ChatService.java           # 参数校验、多轮消息组装、ChatClient 同步/流式调用、异常归一、
+│                                      #   流式首片段前有限重试（Flux.defer + retryWhen）
+├── advisor/RequestLoggingAdvisor.java # 迭代2：请求日志 Advisor（Call+Stream 双接口，不记内容/密钥）
+├── sse/                               # 迭代2：SseHeartbeatScheduler/ScheduledHeartbeat 抽象 +
+│                                      #   DefaultSseHeartbeatScheduler（daemon 线程，可注入/可测）
+├── config/
+│   ├── ChatClientConfig.java          # 由自动配置的 ChatClient.Builder 装配 ChatClient（挂载日志 Advisor、
+│   │                                  #   app.chat.system-prompt 非空白时条件注入 defaultSystem）
+│   ├── http/ChatHttpProperties.java   # 迭代2：app.chat.http.* 连接池/超时配置属性
+│   ├── http/SyncHttpClientConfig.java # 迭代2：HttpClient5 连接池 + RestClientCustomizer
+│   ├── http/StreamHttpClientConfig.java # 迭代2：Netty ConnectionProvider + WebClientCustomizer
+│   └── retry/ChatRetryConfig.java     # 迭代2：自定义 RetryTemplate（3 次指数退避、429/5xx/网络故障）
 ├── dto/                               # ChatRequest / ChatMessage / ChatResponse / ApiError / StreamChunk
 └── exception/                         # ChatNotConfiguredException / ModelCallException /
                                        # InvalidChatRequestException / GlobalExceptionHandler
 src/main/resources/
-├── application.yml                    # 入库配置（密钥占位、三套存储连接、Hikari 懒启动）
+├── application.yml                    # 入库配置（密钥占位、三套存储连接、Hikari 懒启动、
+│                                      #   迭代2 的重试/连接池/心跳/system-prompt 全部外置）
 └── application-local.yml.example      # 本地凭证模板（复制为 application-local.yml，已被 gitignore）
 ```
 
@@ -99,6 +113,25 @@ src/main/resources/
 - **SSE 事件协议**：`event:message`（`data:{"content":"片段"}`，多帧）→ `event:done`（`data:[DONE]`）；
   异常或缺 Key 发 `event:error`（data 为错误 JSON）后立即关闭，不无限挂起；超时 120s（`app.chat.sse-timeout-ms`）。
 - **错误码**：400 `BAD_REQUEST` / 503 `ARK_NOT_CONFIGURED` / 502 `MODEL_CALL_FAILED`，错误响应不含堆栈与密钥。
+- **SSE 心跳保活（迭代2）**：模型思考空闲期按 `app.chat.heartbeat.interval`（默认 15s）发注释帧
+  `:keepalive`（SSE 标准注释，EventSource 自动忽略，不是 message/done/error 事件）；每个模型片段到达即重置计时；
+  完成/出错/超时/客户端断连四条路径都会取消心跳。`curl -N` 可直接观察到 `:keepalive` 行。
+  开关 `app.chat.heartbeat.enabled`（环境变量 `APP_CHAT_HEARTBEAT_ENABLED=false` 关闭），
+  间隔 `APP_CHAT_HEARTBEAT_INTERVAL`，帧文本 `APP_CHAT_HEARTBEAT_TEXT`。
+- **重试策略（迭代2）**：同步路径由自定义 RetryTemplate 接管 `spring.ai.retry.*`——最多 3 次、指数退避
+  1s→2x→10s，仅对 429（`on-http-codes` 显式放行）、5xx、网络层故障（连接拒绝/超时，`ResourceAccessException`
+  按 cause 链穿透）重试；400/401/404 等 4xx 立即失败（缺 Key 不重试）。流式路径框架不重试，应用层
+  仅在**首个模型片段到达前**对同样的瞬时故障重试 3 次；首片段后中断不重放（避免内容重复），直接发 error 事件。
+  日志关键字：`模型调用第 N 次尝试失败`、`模型调用重试已耗尽`。
+- **HTTP 连接池（迭代2）**：同步走 Apache HttpClient5 连接池（`app.chat.http.sync.*`），
+  流式走 Reactor Netty 连接池（`app.chat.http.stream.*`，含 `response-timeout` 兜底模型卡死）；
+  池大小/超时全部在 application.yml 外置，生产按并发量上调 pool 上限。
+- **系统提示词（迭代2）**：`app.chat.system-prompt`（环境变量 `APP_CHAT_SYSTEM_PROMPT`）非空白时
+  自动以 `ChatClient.defaultSystem(...)` 对每次调用生效；留空（默认）保持迭代 1 纯用户对话行为。
+- **请求日志 Advisor（迭代2）**：`RequestLoggingAdvisor` 同时挂载同步/流式链路，INFO 记录消息数、model、
+  耗时、成功/失败、流式片段数；**只记长度不记内容、绝不记密钥/Authorization 头**（DEBUG 也仅记消息长度）。
+  日志关键字：`模型调用开始[call|stream]`、`模型调用成功[call|stream]`、`模型调用失败[call|stream]`。
+  该 Advisor 同时是后续 ChatMemory/MCP/RAG 的统一挂载点示范。
 - **思考链与响应速度**：Coding Plan 套餐内 doubao/deepseek/glm 均为推理模型，默认会先生成思考链
   （`reasoning_content`），简单问题也要数秒、同步接口尤为明显。配置
   `spring.ai.openai.chat.options.reasoning-effort=none`（入库默认值，环境变量 `ARK_REASONING_EFFORT` 可覆盖）

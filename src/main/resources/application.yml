@@ -13,6 +13,19 @@ spring:
 
   # ---- Spring AI / 火山方舟（配置 key 已经 M7 jar 构建期核验）----
   ai:
+    # ---- 迭代2：Spring AI 重试（同步路径；前缀 spring.ai.retry 已经 M7 jar 实证）----
+    # M7 ResponseErrorHandler 状态码分类（字节码实证顺序）：on-http-codes 命中→Transient（可重试）；
+    # 默认 on-client-errors=false 时其余 4xx→NonTransient；5xx→Transient。
+    # 故 429 在此显式放行重试；400/401/404 等保持不可重试；缺 Key（401）不重试。
+    # 网络层故障（ResourceAccessException，连接拒绝/超时）由自定义 RetryTemplate 追加（见 ChatRetryConfig）。
+    retry:
+      max-attempts: 3
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+        max-interval: 10s
+      on-http-codes:
+        - 429
     openai:
       # 方舟 Coding Plan OpenAI 兼容端点
       base-url: https://ark.cn-beijing.volces.com/api/coding/v3
@@ -73,3 +86,45 @@ app:
   chat:
     # SSE 流超时时间（毫秒）
     sse-timeout-ms: 120000
+
+    # ---- 迭代2：默认系统提示词（条件装配）----
+    # 非空白 → ChatClient.defaultSystem(...) 对每次调用生效（系统消息置于消息列表最前）；
+    # 空白（默认）= 迭代 1 行为，不注入系统消息。留空时支持多环境差异：不设即纯用户对话。
+    system-prompt: ${APP_CHAT_SYSTEM_PROMPT:}
+
+    # ---- 迭代2：SSE 空闲心跳 ----
+    # 模型「思考期」无任何字节时，按间隔发 SSE 注释帧（:keepalive，EventSource 标准忽略），
+    # 防 Nginx/网关/浏览器空闲断连；每个模型片段到达即重置计时；
+    # 完成/出错/超时/客户端断连四条路径全部取消心跳。
+    heartbeat:
+      enabled: ${APP_CHAT_HEARTBEAT_ENABLED:true}
+      interval: ${APP_CHAT_HEARTBEAT_INTERVAL:15s}
+      text: ${APP_CHAT_HEARTBEAT_TEXT:keepalive}
+
+    # ---- 迭代2：HTTP 连接池与超时（同步 Apache HttpClient5 / 流式 Reactor Netty）----
+    # 全部参数外置；默认值面向本地开发与小规模联调，生产按并发量上调 pool 上限。
+    http:
+      sync:
+        connect-timeout: 5s
+        read-timeout: 60s
+        connection-request-timeout: 5s
+        pool:
+          max-total: 20
+          max-per-route: 20
+      stream:
+        connect-timeout: 5s
+        response-timeout: 60s
+        pool:
+          max-connections: 20
+          pending-acquire-max-count: 40
+          pending-acquire-timeout: 5s
+          max-idle-time: 30s
+
+    # ---- 迭代2：流式路径应用层重试（框架 RetryTemplate 不覆盖 stream）----
+    # 仅在「首个模型片段到达前」对 429/5xx/网络 IO 故障有限重试；首片段后中断不重放。
+    # 退避与同步 spring.ai.retry 对齐（1s 起、指数 2x、上限 10s）。
+    retry:
+      stream:
+        max-attempts: 3
+        min-backoff: 1s
+        max-backoff: 10s
