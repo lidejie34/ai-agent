@@ -25,7 +25,7 @@
 | 迭代 | 能力 | 内容 | 状态 | 需求目录 |
 |---|---|---|---|---|
 | 迭代 1 | 对话调通 | Spring Boot 3.4 + Spring AI 1.0.0-M7 + JDK17；同步 `POST /api/chat`、SSE 流式 `POST /api/chat/stream`；多轮 history 由请求传入；MySQL/Redis/PG 依赖+配置预留 | ✅ 已交付（26 测试全绿，真实联调通过） | `20260901-...-springai-ark-chat-bootstrap` |
-| 迭代 2 | 地基加固 | ① ChatClient Advisor 层（配置化 system prompt + 日志 Advisor 示例，立起 ChatMemory/MCP 挂载点）；② 显式 HTTP 连接池（RestClient/HttpClient5 + WebClient/Netty）；③ 超时 + 3 次指数退避重试（仅网络/429/5xx）；④ SSE 15s 心跳保活 | ✅ 已交付（74 测试全绿：26 既有 + 48 新增；真实联调待 agent-联调） | `20260902-...-advisor-resilience-foundation` |
+| 迭代 2 | 地基加固 | ① ChatClient Advisor 层（配置化 system prompt + 日志 Advisor 示例，立起 ChatMemory/MCP 挂载点）；② 显式 HTTP 连接池（RestClient/HttpClient5 + WebClient/Netty）；③ 超时 + 3 次指数退避重试（仅网络/429/5xx）；④ SSE 15s 心跳保活 | ✅ 已交付（75 测试全绿：26 既有 + 49 新增；本地真实冒烟 PASS：同步/SSE/心跳帧/400/多轮，冒烟中修复 Advisor 消息数统计 1 处；分支 feat/advisor-resilience-foundation 已推送，commits ae98d61+4da2db4） | `20260902-...-advisor-resilience-foundation` |
 | 迭代 3 | 会话持久化（A） | Spring AI `ChatMemory` + Advisor 接入，会话/消息落 MySQL 13306；接口从「请求带全量 history」平滑过渡为「传 sessionId，服务端加载历史」 | 🔄 下一位 | — |
 | 迭代 4 | MCP 工具（B） | MCP Client / ToolCallback，模型可调用外部工具（查库、调内部接口、搜文档）；工具以 Advisor/ToolCallback 形式挂载 | ⏳ 待开始 | — |
 | 迭代 5 | SDD 子 Agent（C） | 任务拆解 → 规划者/执行者多 Agent 编排，对话服务作为底层模型调用能力被复用 | ⏳ 待开始 | — |
@@ -58,3 +58,12 @@
   `RestClientCustomizer` / `WebClientCustomizer`（作用于自动配置 ObjectProvider 提供的 Builder）
 - `spring.ai.retry.on-http-codes` 命中的状态码在 M7 ResponseErrorHandler 中分类为 Transient（可重试）；
   默认 `on-client-errors=false` 时其余 4xx 为 NonTransient、5xx 为 Transient
+- **【迭代3 ChatMemory 关键】M7 Advisor 视角的消息归并**（字节码实证 `DefaultChatClient.toAdvisedRequest`）：
+  `chatClient.prompt().messages(列表)` 传入的**最后一条 UserMessage 会被提升为 `AdvisedRequest.userText()`
+  并从 `messages()` 移除**（subList(0,n-1)）；Advisor 视角 `messages()`=仅历史消息、`userText()`=本轮用户消息、
+  `systemText()`=系统提示（toPrompt 时渲染为 SystemMessage）。MessageChatMemoryAdvisor 往 `messages()`
+  塞历史的模式与此约定天然兼容；自定义 Advisor 统计消息数须三者相加（迭代2 冒烟实测修复过此缺陷）
+- SSE 心跳冒烟实测（2026-09-02）：reasoning-effort=high 时模型思考期 ~11s 无内容帧，5s 间隔的 `:keepalive`
+  注释帧准时到达且首片段后停止；心跳帧为 SSE 注释（`:keepalive\n`），EventSource 标准忽略
+- Netty 在 macOS 缺 `netty-resolver-dns-native-macos` 时启动打印一条 ERROR 级 DNS 提示，回退 JDK 系统
+  DNS，不影响功能（开发机无害警告，生产 Linux 无此现象）
