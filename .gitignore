@@ -9,3 +9,57 @@ logs/
 # 含真实凭证的本地配置，禁止入库
 application-local.yml
 .env
+
+
+# ========== Node / Backend ==========
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# 环境密钥，绝对不要提交API_KEY
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ========== Vue Frontend ==========
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+logs/
+*.log
+
+# temp
+tmp/
+temp/
+
+# ========== Optional 如果你后续加Java/Spring后端也兼容 ==========
+# target/
+# *.iml
+# .mvn
+# mvnw
+# mvnw.cmd
+
+# ========== Git 自身 ==========
+.git/
