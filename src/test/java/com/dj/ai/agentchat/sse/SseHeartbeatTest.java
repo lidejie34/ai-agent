@@ -1,15 +1,18 @@
 package com.dj.ai.agentchat.sse;
 
+import com.dj.ai.agentchat.config.web.FastJsonWebConfig;
 import com.dj.ai.agentchat.controller.ChatController;
 import com.dj.ai.agentchat.dto.ChatRequest;
 import com.dj.ai.agentchat.exception.ChatNotConfiguredException;
 import com.dj.ai.agentchat.exception.ModelCallException;
 import com.dj.ai.agentchat.service.ChatService;
+import com.dj.ai.agentchat.service.ChatStreamResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -161,6 +164,7 @@ class SchedulerUnitTest {
 
 // ============ 2) 控制器切片：注释帧/重置/取消（T12 + T13 完成/出错路径） ============
 @WebMvcTest(ChatController.class)
+@Import(FastJsonWebConfig.class) // 迭代3：切片显式启用 fastjson2，SSE JSON 帧与生产同走 fastjson2
 class ControllerSliceTest {
 
     private static final String STREAM_URL = "/api/chat/stream";
@@ -186,7 +190,9 @@ class ControllerSliceTest {
     @Test
     void idleHeartbeatsEmitCommentFrames_thenChunkAndDone_unpolluted() throws Exception {
         Sinks.Many<String> sink = Sinks.many().unicast().onBackpressureBuffer();
-        when(chatService.chatStream(any(ChatRequest.class))).thenReturn(sink.asFlux());
+        // 迭代3：无状态 stub（sessionId=null），不发 event:session，帧序列与迭代2一致
+        when(chatService.chatStream(any(ChatRequest.class)))
+                .thenReturn(new ChatStreamResult(null, sink.asFlux()));
 
         MvcResult mvcResult = mockMvc.perform(post(STREAM_URL)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -230,7 +236,8 @@ class ControllerSliceTest {
     @Test
     void fluxError_sendsErrorEvent_andCancelsHeartbeat() throws Exception {
         Sinks.Many<String> sink = Sinks.many().unicast().onBackpressureBuffer();
-        when(chatService.chatStream(any(ChatRequest.class))).thenReturn(sink.asFlux());
+        when(chatService.chatStream(any(ChatRequest.class)))
+                .thenReturn(new ChatStreamResult(null, sink.asFlux()));
 
         MvcResult mvcResult = mockMvc.perform(post(STREAM_URL)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -276,7 +283,8 @@ class ControllerLifecycleTest {
         handle = mock(ScheduledHeartbeat.class);
         when(scheduler.schedule(any(Runnable.class), any(Duration.class))).thenReturn(handle);
         Sinks.Many<String> sink = Sinks.many().unicast().onBackpressureBuffer();
-        when(chatService.chatStream(any(ChatRequest.class))).thenReturn(sink.asFlux());
+        when(chatService.chatStream(any(ChatRequest.class)))
+                .thenReturn(new ChatStreamResult(null, sink.asFlux()));
     }
 
     private ChatController controller(boolean heartbeatEnabled) {
@@ -355,8 +363,9 @@ class ControllerLifecycleTest {
 
     @Test
     void fluxFromService_fluxApiUnchanged() {
-        // 回归护栏：ChatService 类型仍可被控制器消费（Flux<String>），编译期契约
-        when(chatService.chatStream(any(ChatRequest.class))).thenReturn(Flux.just("a", "b"));
+        // 回归护栏：ChatService 返回的 ChatStreamResult.chunks() 仍为 Flux<String>，可被控制器消费
+        when(chatService.chatStream(any(ChatRequest.class)))
+                .thenReturn(new ChatStreamResult(null, Flux.just("a", "b")));
         SseEmitter emitter = startStream();
         assertThat(emitter).isNotNull();
     }

@@ -73,6 +73,12 @@ spring:
       database: 0
       timeout: 3s
 
+# ---- 迭代3：MyBatis-Plus 持久层（会话记忆）----
+# 无 mapper XML（注解 SQL），不配 mapper-locations；下划线列↔驼峰属性显式固化（MP 默认即 true）。
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
 # ---- 存储预留 3/3：Postgres（后续 pgvector/RAG）----
 # 自定义命名空间，不绑定任何 Spring 自动配置，仅作连接参数预留；
 # 后续启用多数据源时迁移为自定义 DataSource bean 配置。
@@ -86,6 +92,15 @@ app:
   chat:
     # SSE 流超时时间（毫秒）
     sse-timeout-ms: 120000
+
+    # ---- 迭代3：会话记忆（ChatMemory + MySQL/MyBatis-Plus）----
+    memory:
+      # 记忆总开关：false 时不装配记忆 Mapper/Store bean、不建表；会话路径请求 400，无状态不受影响
+      enabled: ${APP_CHAT_MEMORY_ENABLED:true}
+      # 续接加载最近 N 条历史（落库全量不裁剪）
+      max-history: ${APP_CHAT_MEMORY_MAX_HISTORY:20}
+      # 启动期 best-effort 建表（DB 不可达仅 warn，不阻断启动；懒建表保证首次记忆路径自愈）
+      init-on-startup: ${APP_CHAT_MEMORY_INIT_ON_STARTUP:true}
 
     # ---- 迭代2：默认系统提示词（条件装配）----
     # 非空白 → ChatClient.defaultSystem(...) 对每次调用生效（系统消息置于消息列表最前）；

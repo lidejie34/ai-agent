@@ -189,7 +189,8 @@ class ChatServiceTest {
         when(chatModel.stream(any(Prompt.class)))
                 .thenReturn(Flux.just(aiResponse("你"), aiResponse("好")));
 
-        StepVerifier.create(service.chatStream(request("说你好")))
+        // 迭代3：chatStream 返回 ChatStreamResult(sessionId, chunks)；无状态请求 sessionId=null
+        StepVerifier.create(service.chatStream(request("说你好")).chunks())
                 .expectNext("你")
                 .expectNext("好")
                 .verifyComplete();
@@ -201,7 +202,7 @@ class ChatServiceTest {
                 .thenReturn(Flux.just(aiResponse("你"), aiResponse("叫"), aiResponse("小明")));
 
         service.chatStream(request("我叫什么？",
-                new ChatMessage("user", "我叫小明"))).collectList().block();
+                new ChatMessage("user", "我叫小明"))).chunks().collectList().block();
 
         ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).stream(captor.capture());
@@ -217,7 +218,7 @@ class ChatServiceTest {
         when(chatModel.stream(any(Prompt.class)))
                 .thenReturn(Flux.error(new RuntimeException("stream boom secret")));
 
-        StepVerifier.create(service.chatStream(request("说你好")))
+        StepVerifier.create(service.chatStream(request("说你好")).chunks())
                 .expectErrorSatisfies(e -> {
                     assertThat(e).isInstanceOf(ModelCallException.class);
                     assertThat(e.getMessage()).doesNotContain("secret");

@@ -46,6 +46,20 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_GATEWAY, "MODEL_CALL_FAILED", e.getMessage());
     }
 
+    @ExceptionHandler(MemoryUnavailableException.class)
+    public ResponseEntity<ApiError> handleMemoryUnavailable(MemoryUnavailableException e) {
+        // 记忆阶段（模型调用前）DB/建表/连接失败：503，客户端可稍后重试或退化为无状态
+        log.warn("会话记忆不可用: {}", e.getMessage());
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "MEMORY_UNAVAILABLE", e.getMessage());
+    }
+
+    @ExceptionHandler(MemoryPersistException.class)
+    public ResponseEntity<ApiError> handleMemoryPersistFailed(MemoryPersistException e) {
+        // 同步模型成功后落库失败：500，reply 不返回，提示整轮重试（避免「说了但没记住」）
+        log.error("会话消息落库失败: {}", e.getMessage(), e);
+        return build(HttpStatus.INTERNAL_SERVER_ERROR, "MEMORY_PERSIST_FAILED", e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception e) {
         log.error("未处理异常", e);
@@ -68,6 +82,11 @@ public class GlobalExceptionHandler {
         }
         if (e instanceof ModelCallException) {
             return new ApiError("MODEL_CALL_FAILED", e.getMessage(), now());
+        }
+        if (e instanceof MemoryUnavailableException) {
+            // 记忆阶段失败发生在订阅前：error 帧同码（MEMORY_PERSIST_FAILED 不进入流式映射——
+            // 流式落库失败仅日志，done 照发）
+            return new ApiError("MEMORY_UNAVAILABLE", e.getMessage(), now());
         }
         return new ApiError("MODEL_CALL_FAILED", "模型流式调用失败，请稍后重试。", now());
     }

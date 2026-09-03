@@ -3,9 +3,11 @@ package com.dj.ai.agentchat.controller;
 import com.dj.ai.agentchat.dto.ApiError;
 import com.dj.ai.agentchat.dto.ChatRequest;
 import com.dj.ai.agentchat.dto.ChatResponse;
+import com.dj.ai.agentchat.dto.SessionEvent;
 import com.dj.ai.agentchat.dto.StreamChunk;
 import com.dj.ai.agentchat.exception.GlobalExceptionHandler;
 import com.dj.ai.agentchat.service.ChatService;
+import com.dj.ai.agentchat.service.ChatStreamResult;
 import com.dj.ai.agentchat.sse.ScheduledHeartbeat;
 import com.dj.ai.agentchat.sse.SseHeartbeatScheduler;
 import lombok.extern.slf4j.Slf4j;
@@ -92,19 +94,33 @@ public class ChatController {
         SseEmitter emitter = new SseEmitter(sseTimeoutMs);
         AtomicInteger chunkCount = new AtomicInteger(0);
 
-        Flux<String> flux;
+        ChatStreamResult result;
         try {
-            flux = chatService.chatStream(request);
+            // 记忆阶段（建会话/加载历史/DB 探测）在 service 同步段完成：失败在此被捕获，
+            // 转 error 事件后关闭——不发 event:session、不启动心跳（AC-15）
+            result = chatService.chatStream(request);
         } catch (RuntimeException e) {
-            // 缺 Key / 参数错误等订阅前同步失败：转 error 事件后关闭，不挂起；此路径不启动心跳
+            // 缺 Key / 参数错误 / 记忆不可用等订阅前同步失败：转 error 事件后关闭，不挂起
             log.warn("SSE流式对话订阅前失败: {}", e.getMessage());
             sendErrorAndComplete(emitter, e);
             return emitter;
         }
 
-        // 订阅成功拿到 Flux 后再启动心跳：订阅前失败路径不会产生心跳任务
+        // 记忆路径：记忆阶段已成功，在首个 message 帧（及心跳）之前回传会话 ID（FR-5/AC-4）。
+        // 发送失败（客户端已断）→ completeWithError 已触发清理回调，直接返回
+        if (result.sessionId() != null) {
+            boolean sent = sendEvent(emitter, SseEmitter.event()
+                    .name("session")
+                    .data(new SessionEvent(result.sessionId()), MediaType.APPLICATION_JSON));
+            if (!sent) {
+                return emitter;
+            }
+        }
+
+        // 订阅成功拿到 Flux 后再启动心跳：订阅前失败 / session 帧发送失败路径不会产生心跳任务
         ScheduledHeartbeat heartbeat = startHeartbeat(emitter);
 
+        Flux<String> flux = result.chunks();
         Disposable subscription = flux.subscribe(
                 chunk -> {
                     int seq = chunkCount.incrementAndGet();
@@ -183,12 +199,17 @@ public class ChatController {
         }
     }
 
-    private void sendEvent(SseEmitter emitter, SseEmitter.SseEventBuilder event) {
+    /**
+     * 发送一帧；写入失败（客户端断连）时 completeWithError 触发 onError/onCompletion 清理，
+     * 并返回 {@code false} 供调用方提前返回（不再起心跳/订阅）。
+     */
+    private boolean sendEvent(SseEmitter emitter, SseEmitter.SseEventBuilder event) {
         try {
             emitter.send(event);
+            return true;
         } catch (IOException e) {
-            // 客户端断连等写入失败：结束 emitter，触发 onError/onCompletion 取消订阅
             emitter.completeWithError(e);
+            return false;
         }
     }
 

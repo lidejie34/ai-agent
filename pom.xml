@@ -102,6 +102,29 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- 迭代3：持久层 MyBatis-Plus（Boot3 专用制品；本地仓库 3.5.5 全套离线可解析；
+             传递 mybatis-spring 3.0.3（Spring6/Boot3 适配）与 spring-boot-starter-jdbc
+             （Hikari + spring-jdbc，建表复用 ScriptUtils）。升 3.5.9+ 需在线拉取。） -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+            <version>3.5.5</version>
+        </dependency>
+
+        <!-- 迭代3：JSON 序列化/反序列化统一走 fastjson2（@RequestBody/@ResponseBody/SSE 帧）。
+             核心与扩展本地 2.0.61 离线可解析；spring6 集成制品已在线拉取入本地仓库（CI/他机需联网）。
+             Jackson 保留在转换器列表兜底，不移除。 -->
+        <dependency>
+            <groupId>com.alibaba.fastjson2</groupId>
+            <artifactId>fastjson2</artifactId>
+            <version>2.0.61</version>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.fastjson2</groupId>
+            <artifactId>fastjson2-extension-spring6</artifactId>
+            <version>2.0.61</version>
+        </dependency>
+
         <!-- 工具 -->
         <dependency>
             <groupId>org.projectlombok</groupId>

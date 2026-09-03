@@ -67,7 +67,7 @@ class ChatServiceStreamRetryTest {
                 .thenReturn(Flux.error(httpError(429)))
                 .thenReturn(Flux.just(aiResponse("你"), aiResponse("好")));
 
-        StepVerifier.create(service.chatStream(request()))
+        StepVerifier.create(service.chatStream(request()).chunks())
                 .expectNext("你")
                 .expectNext("好")
                 .verifyComplete();
@@ -81,7 +81,7 @@ class ChatServiceStreamRetryTest {
                 .thenReturn(Flux.error(new RuntimeException(new IOException("connection reset by peer"))))
                 .thenReturn(Flux.just(aiResponse("恢复")));
 
-        StepVerifier.create(service.chatStream(request()))
+        StepVerifier.create(service.chatStream(request()).chunks())
                 .expectNext("恢复")
                 .verifyComplete();
 
@@ -92,7 +92,7 @@ class ChatServiceStreamRetryTest {
     void stream_transientErrorAlwaysFails_retriesThreeTimesThenErrorEvent() {
         when(chatModel.stream(any(Prompt.class))).thenAnswer(inv -> Flux.error(httpError(500)));
 
-        StepVerifier.create(service.chatStream(request()))
+        StepVerifier.create(service.chatStream(request()).chunks())
                 .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(ModelCallException.class))
                 .verify();
 
@@ -103,7 +103,7 @@ class ChatServiceStreamRetryTest {
     void stream_4xxBeforeFirstChunk_notRetried() {
         when(chatModel.stream(any(Prompt.class))).thenAnswer(inv -> Flux.error(httpError(404)));
 
-        StepVerifier.create(service.chatStream(request()))
+        StepVerifier.create(service.chatStream(request()).chunks())
                 .expectError(ModelCallException.class)
                 .verify();
 
@@ -115,7 +115,7 @@ class ChatServiceStreamRetryTest {
         when(chatModel.stream(any(Prompt.class)))
                 .thenReturn(Flux.concat(Flux.just(aiResponse("片段一")), Flux.error(httpError(503))));
 
-        StepVerifier.create(service.chatStream(request()))
+        StepVerifier.create(service.chatStream(request()).chunks())
                 .expectNext("片段一")
                 .expectError(ModelCallException.class)
                 .verify();

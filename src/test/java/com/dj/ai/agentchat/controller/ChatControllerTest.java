@@ -6,8 +6,11 @@ import com.dj.ai.agentchat.exception.ChatNotConfiguredException;
 import com.dj.ai.agentchat.exception.InvalidChatRequestException;
 import com.dj.ai.agentchat.exception.ModelCallException;
 import com.dj.ai.agentchat.service.ChatService;
+import com.dj.ai.agentchat.service.ChatStreamResult;
+import com.dj.ai.agentchat.config.web.FastJsonWebConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -31,6 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 只验证协议适配：同步 200/400/503/502 与 SSE 分段/done/error 事件。
  */
 @WebMvcTest(ChatController.class)
+@Import(FastJsonWebConfig.class) // 迭代3：切片显式启用 fastjson2，与生产转换器链一致（实证 6.4）
 class ChatControllerTest {
 
     private static final String CHAT_URL = "/api/chat";
@@ -152,8 +156,9 @@ class ChatControllerTest {
 
     @Test
     void stream_chunksAndDone_emitsMessageEvents() throws Exception {
+        // 迭代3：chatStream 返回 ChatStreamResult(sessionId, chunks)；无状态 stub sessionId=null
         when(chatService.chatStream(any(ChatRequest.class)))
-                .thenReturn(Flux.just("你", "好"));
+                .thenReturn(new ChatStreamResult(null, Flux.just("你", "好")));
 
         MvcResult mvcResult = mockMvc.perform(post(STREAM_URL)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -180,8 +185,8 @@ class ChatControllerTest {
     @Test
     void stream_fluxError_emitsErrorEventAndCompletes() throws Exception {
         when(chatService.chatStream(any(ChatRequest.class)))
-                .thenReturn(Flux.error(new ModelCallException("模型流式调用失败，请稍后重试。",
-                        new RuntimeException("stream-boom"))));
+                .thenReturn(new ChatStreamResult(null, Flux.error(new ModelCallException(
+                        "模型流式调用失败，请稍后重试。", new RuntimeException("stream-boom")))));
 
         MvcResult mvcResult = mockMvc.perform(post(STREAM_URL)
                         .contentType(MediaType.APPLICATION_JSON)
