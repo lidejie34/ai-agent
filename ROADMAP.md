@@ -11,7 +11,7 @@
    ↓
 迭代2 ✅ 地基加固：Advisor 层 + 连接池 + 超时重试 + SSE 保活
    ↓ （为后续所有功能铺好 Advisor 挂载点与稳定性底座）
-迭代3 ✅ 会话持久化：ChatMemory + MySQL（接口加 sessionId；真实 MySQL 冒烟待 step_8）
+迭代3 ✅ 会话持久化：ChatMemory + MyBatis-Plus/MySQL（sessionId 三态、event:session、fastjson2）
    ↓
 迭代4    MCP 工具接入：Function Calling / MCP Client（模型长出"手"）
    ↓
@@ -26,7 +26,7 @@
 |---|---|---|---|---|
 | 迭代 1 | 对话调通 | Spring Boot 3.4 + Spring AI 1.0.0-M7 + JDK17；同步 `POST /api/chat`、SSE 流式 `POST /api/chat/stream`；多轮 history 由请求传入；MySQL/Redis/PG 依赖+配置预留 | ✅ 已交付（26 测试全绿，真实联调通过） | `20260901-...-springai-ark-chat-bootstrap` |
 | 迭代 2 | 地基加固 | ① ChatClient Advisor 层（配置化 system prompt + 日志 Advisor 示例，立起 ChatMemory/MCP 挂载点）；② 显式 HTTP 连接池（RestClient/HttpClient5 + WebClient/Netty）；③ 超时 + 3 次指数退避重试（仅网络/429/5xx）；④ SSE 15s 心跳保活 | ✅ 已交付（75 测试全绿：26 既有 + 49 新增；本地真实冒烟 PASS：同步/SSE/心跳帧/400/多轮，冒烟中修复 Advisor 消息数统计 1 处；分支 feat/advisor-resilience-foundation 已推送，commits ae98d61+4da2db4） | `20260902-...-advisor-resilience-foundation` |
-| 迭代 3 | 会话持久化（A） | Spring AI `ChatMemory` 契约 + MyBatis-Plus 落 MySQL 13306（chat_session/chat_message，懒建表+启动 best-effort）；接口加 `sessionId` 三态（null 无状态/`""` 新建/UUID 续接）；SSE 新增 `event:session` 帧；fastjson2 接管 JSON；记忆开关 `app.chat.memory.enabled`（false 全家桶不装配、会话路径 400）；503 `MEMORY_UNAVAILABLE` / 500 `MEMORY_PERSIST_FAILED` | ✅ TDD 已交付（146 测试全绿：75 既有 + 71 新增，全程离线 mock；真实 MySQL/方舟冒烟待总控 step_8，冒烟清单见 README 8f）；零 git commit，改动全部留在工作区 | `20260902-...-chatmemory-mysql-persistence` |
+| 迭代 3 | 会话持久化（A） | Spring AI `ChatMemory` 契约 + MyBatis-Plus 落 MySQL 13306（chat_session/chat_message，懒建表+启动 best-effort）；接口加 `sessionId` 三态（null 无状态/`""` 新建/UUID 续接）；SSE 新增 `event:session` 帧；fastjson2 接管 JSON；记忆开关 `app.chat.memory.enabled`（false 全家桶不装配、会话路径 400）；503 `MEMORY_UNAVAILABLE` / 500 `MEMORY_PERSIST_FAILED` | ✅ 已交付（146 测试全绿：75 既有 + 71 新增；真实 MySQL 8 + 方舟冒烟 PASS：自动建表、首轮新建/续接多轮记忆、event:session、成对落库中文 emoji 完整、无状态零 DB；分支 feat/chatmemory-mysql-persistence 已推送 commit ac0febc） | `20260902-...-chatmemory-mysql-persistence` |
 | 迭代 4 | MCP 工具（B） | MCP Client / ToolCallback，模型可调用外部工具（查库、调内部接口、搜文档）；工具以 Advisor/ToolCallback 形式挂载 | ⏳ 待开始 | — |
 | 迭代 5 | SDD 子 Agent（C） | 任务拆解 → 规划者/执行者多 Agent 编排，对话服务作为底层模型调用能力被复用 | ⏳ 待开始 | — |
 | 待定 | RAG 知识库（E） | PG 15432 + pgvector：文档切片 → embedding → 检索增强问答；可复用 MCP 工具能力 | ⏳ 待开始 | — |
