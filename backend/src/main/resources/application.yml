@@ -53,7 +53,12 @@ spring:
 
   # ---- 存储预留 1/3：MySQL（HikariCP；本期不连库、不建表）----
   datasource:
-    url: jdbc:mysql://127.0.0.1:13306/dj_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+    # 时区（迭代4 冒烟实证）：MySQL 容器默认 UTC，connector-j 9.x 中 serverTimezone 仅弃用别名、
+    # 不强制会话时区，而 MyBatis 把 TIMESTAMP 读成 LocalDateTime 取的是 MySQL 会话墙钟——
+    # 必须 connectionTimeZone + forceConnectionTimeZoneToSession=true 让驱动在每条连接上
+    # SET time_zone='Asia/Shanghai'，CURRENT_TIMESTAMP 落库与读取才是北京时间（部署环境若
+    # 无命名时区表，可把 Asia/Shanghai 换成 +08:00 偏移量，效果相同）。
+    url: jdbc:mysql://127.0.0.1:13306/dj_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&connectionTimeZone=Asia/Shanghai&forceConnectionTimeZoneToSession=true&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
     username: root
     password: root
     driver-class-name: com.mysql.cj.jdbc.Driver

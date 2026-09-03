@@ -1,5 +1,6 @@
 package com.dj.ai.agentchat.config.web;
 
+import com.alibaba.fastjson2.support.spring6.http.converter.FastJsonHttpMessageConverter;
 import com.dj.ai.agentchat.dto.ChatRequest;
 import com.dj.ai.agentchat.dto.ChatResponse;
 import com.dj.ai.agentchat.dto.SessionEvent;
@@ -8,16 +9,27 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.StringHttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -52,6 +64,69 @@ class FastJsonWebConfigTest {
         SessionEvent event(@RequestBody ChatRequest request) {
             return new SessionEvent(request.sessionId());
         }
+
+        /** 迷你 SSE 端点：一帧 JSON 对象 + 一帧纯文本 [DONE]，用于锁线网分帧格式。 */
+        @GetMapping("/echo/sse")
+        SseEmitter sse() {
+            SseEmitter emitter = new SseEmitter(5000L);
+            Thread sender = new Thread(() -> {
+                try {
+                    emitter.send(SseEmitter.event().name("session").data(new SessionEvent(UUID36)));
+                    emitter.send(SseEmitter.event().name("done").data("[DONE]"));
+                    emitter.complete();
+                } catch (IOException e) {
+                    emitter.completeWithError(e);
+                }
+            });
+            sender.setDaemon(true);
+            sender.start();
+            return emitter;
+        }
+    }
+
+    @Autowired
+    private RequestMappingHandlerAdapter handlerAdapter;
+
+    @Test
+    void stringConverter_precedesFastjson_soSseTextFramesAreNotJsonQuoted() {
+        List<HttpMessageConverter<?>> converters = handlerAdapter.getMessageConverters();
+        int stringIdx = -1;
+        int fastjsonIdx = -1;
+        for (int i = 0; i < converters.size(); i++) {
+            if (converters.get(i) instanceof StringHttpMessageConverter && stringIdx < 0) {
+                stringIdx = i;
+            }
+            if (converters.get(i) instanceof FastJsonHttpMessageConverter && fastjsonIdx < 0) {
+                fastjsonIdx = i;
+            }
+        }
+        assertThat(stringIdx).as("StringHttpMessageConverter 必须存在且排在 fastjson2 之前").isGreaterThanOrEqualTo(0);
+        assertThat(fastjsonIdx).as("FastJsonHttpMessageConverter 必须存在").isGreaterThanOrEqualTo(0);
+        assertThat(stringIdx).isLessThan(fastjsonIdx);
+
+        // 文本帧（event:/data 前缀、[DONE]、:keepalive）由 String 转换器原样输出
+        assertThat(converters.get(stringIdx).canWrite(String.class, MediaType.TEXT_PLAIN)).isTrue();
+        // DTO 对象 String 转换器不命中，回落 fastjson2 输出 JSON
+        assertThat(converters.get(stringIdx).canWrite(SessionEvent.class, MediaType.ALL)).isFalse();
+        assertThat(converters.get(fastjsonIdx).canWrite(SessionEvent.class, MediaType.ALL)).isTrue();
+    }
+
+    @Test
+    void sseWireFormat_framesUseRawNewlines_andDoneIsNotJsonQuoted() throws Exception {
+        MvcResult mvcResult = mockMvc.perform(get("/echo/sse"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mvcResult.getAsyncResult(5000);
+
+        String body = mockMvc.perform(asyncDispatch(mvcResult))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        // 正确线格式：event:/data: 行 + 真实换行
+        assertThat(body).contains("event:session\n").contains("data:{\"sessionId\":\"" + UUID36 + "\"}");
+        assertThat(body).contains("event:done\n").contains("data:[DONE]");
+        // 回归红线（迭代4 冒烟发现的 fastjson2 转义 bug）：帧不得被 JSON 字符串包裹
+        assertThat(body).doesNotContain("\"event:").doesNotContain("\\n");
     }
 
     @Test
