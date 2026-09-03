@@ -17,7 +17,8 @@
    ↓
 迭代5    SDD 子 Agent 编排：任务拆解 → 多 Agent 协作
    ↓
-按需穿插：可观测性 / Redis 缓存 / RAG 知识库 / 前端对话页 / 安全加固
+按需穿插：可观测性 / Redis 缓存 / RAG 知识库 / 安全加固
+（前端对话页 F 已随迭代4 提前交付 ✅）
 ```
 
 ## 主线功能演进
@@ -30,7 +31,7 @@
 | 迭代 4 | MCP 工具（B） | MCP Client / ToolCallback，模型可调用外部工具（查库、调内部接口、搜文档）；工具以 Advisor/ToolCallback 形式挂载 | ⏳ 待开始 | — |
 | 迭代 5 | SDD 子 Agent（C） | 任务拆解 → 规划者/执行者多 Agent 编排，对话服务作为底层模型调用能力被复用 | ⏳ 待开始 | — |
 | 待定 | RAG 知识库（E） | PG 15432 + pgvector：文档切片 → embedding → 检索增强问答；可复用 MCP 工具能力 | ⏳ 待开始 | — |
-| 待定 | 前端对话页（F） | 打字机界面（消费 SSE）、会话管理、停止生成；建议用 Vercel AI SDK 类库 | ⏳ 待开始 | — |
+| 迭代 4 | 前端对话页（F） | 仓库重构为 `backend/`+`frontend/` 双子目录（T0 纯 git mv，历史保留、146 基线零回归）；后端新增会话管理 REST（`/api/sessions` 列表/历史/重命名/删除，400/404/503 齐备）+ 首轮用户消息自动生成会话标题（20/30 codePoint 截断，best-effort）；前端 Vite+React18+TS+antd5：fetch 手写 SSE 分帧消费（30s 看门狗、AbortController 双 reason 停止/超时）、会话侧边栏（列表/切换/重命名/删除/骨架/重试，流式中切换阻止）、Markdown 渲染（gfm+highlight，禁 rehype-raw，XSS 回归测试、代码块复制）、Enter/Shift+Enter/IME 输入、自动贴底滚动、错误码差异化文案、草稿与刷新恢复（localStorage 仅存非敏感 UI 状态）；生产同源部署（后端无 CORS，nginx 反代 `proxy_buffering off` 等 SSE 指令） | ✅ 已交付（后端 216 测试全绿：146 既有 + 70 新增；前端 83 测试全绿、`tsc -b && vite build` 零错误；真实 MySQL+方舟 key 全链路冒烟按约定留总控 step_8 执行；本迭代零 git commit，改动全部留在工作区由 step_7 统一提交） | `20260903-...-frontend-chat-ui` |
 
 ## 横切工程优化（地基类，按需穿插）
 
