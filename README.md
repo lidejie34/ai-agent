@@ -22,6 +22,85 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
 - 后端：JDK **17**（Eclipse Temurin 17，`/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home`；
   本机默认 JDK 为 1.8，**每个新终端必须先切换**）、Maven 3.9+（本机 3.9.9，离线仓库 `~/tc/tc_resp`）。
 - 前端：Node 18+（推荐 20/22）、npm 10+。
+- 本地 MySQL（会话持久化需要）：docker 容器 `db-mysql-1`，宿主机端口 `127.0.0.1:13306`，
+  库 `dj_agent`（表由应用启动 best-effort 自动建）；MySQL/Key 缺失时应用仍可启动，仅相关功能降级。
+
+## 启动与停止（本地开发速查）
+
+本地联调需**同时运行后端（8080）与前端（5173）**两个进程；浏览器只访问 **http://localhost:5173**，
+`/api` 由 Vite proxy 同源转发到后端（后端无 CORS，不要让浏览器直连 8080）。
+
+### 方式一：两个终端前台运行（推荐，日志直接可见，停止最简单）
+
+```bash
+# 终端 1 —— 后端（每个新终端先切 JDK17；本机默认 JDK 是 1.8）
+cd backend
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+mvn -o spring-boot:run -Dspring-boot.run.profiles=local    # local profile 读 gitignored 的 application-local.yml（真实 Key/MySQL）
+
+# 终端 2 —— 前端
+cd frontend
+npm install        # 仅首次
+npm run dev        # http://localhost:5173
+```
+
+**停止：在对应终端按 `Ctrl + C`**（两个终端各自停止；后端 mvn 退出后若端口未立即释放，等 2~3 秒即可）。
+
+### 方式二：后台运行（不占用终端，日志落 `logs/`，已 gitignore）
+
+```bash
+# 启动后端（仓库根目录执行）
+mkdir -p logs
+cd backend
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
+nohup mvn -o spring-boot:run -Dspring-boot.run.profiles=local > ../logs/backend.log 2>&1 &
+echo $! > ../logs/backend.pid
+
+# 启动前端
+cd ../frontend
+nohup npm run dev > ../logs/frontend.log 2>&1 &
+echo $! > ../logs/frontend.pid
+
+# 看日志
+tail -f logs/backend.log logs/frontend.log
+```
+
+停止（二选一）：
+
+```bash
+# ① 按启动时记录的 PID 停止
+kill "$(cat logs/backend.pid)" "$(cat logs/frontend.pid)"
+
+# ② 按端口停止（PID 文件丢失/进程残留时兜底）
+kill "$(lsof -ti:8080)"   # 后端
+kill "$(lsof -ti:5173)"   # 前端
+```
+
+> 注：`mvn spring-boot:run` 后台运行时，`kill` mvn 进程后个别情况下 java 子进程会残留占用端口，
+> 用 `lsof -ti:8080 | xargs kill` 兜底；启动前也可用 `lsof -nP -iTCP:8080 -sTCP:LISTEN` 确认端口空闲。
+
+### 端口冲突时（如 8080 被 IDEA 里的实例占用）
+
+后端换端口启动，前端 proxy 目标用环境变量同步指向（shell 变量优先级高于 `.env.development`）：
+
+```bash
+# 后端跑 8081（绝不 kill 别人占用 8080 的进程）
+mvn -o spring-boot:run -Dspring-boot.run.profiles=local \
+  -Dspring-boot.run.arguments="--server.port=8081"
+
+# 前端指向 8081（或直接改 frontend/.env.development 的 VITE_DEV_PROXY_TARGET）
+VITE_DEV_PROXY_TARGET=http://localhost:8081 npm run dev
+```
+
+### 验证两个进程都活着
+
+```bash
+curl -s -o /dev/null -w 'backend 8080: %{http_code}\n' http://localhost:8080/api/sessions   # 期望 200
+curl -s -o /dev/null -w 'vite    5173: %{http_code}\n' http://localhost:5173/               # 期望 200
+lsof -nP -iTCP:8080 -sTCP:LISTEN    # 查看后端监听进程
+lsof -nP -iTCP:5173 -sTCP:LISTEN    # 查看前端监听进程
+```
 
 ## 快速开始
 
@@ -36,7 +115,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 java -version    # 期望 openjdk version "17.0.x"（Temurin）
 mvn -v           # 期望 Java version: 17.0.x；若显示 1.8 说明切换失败
 
-# 2) 离线全量测试（无需 Key、无需外网、无需数据库，应全绿；216 测试）
+# 2) 离线全量测试（无需 Key、无需外网、无需数据库，应全绿；219 测试）
 mvn -o test
 
 # 3) 不启动 MySQL、不填 Key，直接启动（验证缺库缺 Key 可启动；无 Key 调对话返回 503 ARK_NOT_CONFIGURED）
@@ -150,7 +229,7 @@ server {
 
 ```bash
 # 后端（cd backend 后，JDK17）
-mvn -o test                       # 离线全量测试（216 测试）
+mvn -o test                       # 离线全量测试（219 测试）
 mvn -o package -DskipTests        # 编译打包（target/dj-agent-chat-0.0.1-SNAPSHOT.jar）
 mvn dependency:resolve            # 解析依赖（Spring AI M7 从 Maven Central 获取）
 
