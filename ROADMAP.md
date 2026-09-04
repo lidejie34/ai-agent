@@ -21,6 +21,9 @@
 
 插入迭代 F ✅ 前端对话页：Vite+React+antd5 + 会话管理 REST（MCP 迭代4 应需求延后，F 提前插入；
    仓库已重构为 backend/ + frontend/ 双子目录，后续迭代后端命令均在 backend/ 下执行）
+   ↓
+插入迭代 G ✅ 工具能力底座：DB 工具注册表 + Function Calling 闭环（模型长出"手"的第一步；
+   迭代4 MCP Client 的前置形态——ToolCallback 体系/审计/管理端可直接复用）
 ```
 
 ## 主线功能演进
@@ -30,7 +33,8 @@
 | 迭代 1 | 对话调通 | Spring Boot 3.4 + Spring AI 1.0.0-M7 + JDK17；同步 `POST /api/chat`、SSE 流式 `POST /api/chat/stream`；多轮 history 由请求传入；MySQL/Redis/PG 依赖+配置预留 | ✅ 已交付（26 测试全绿，真实联调通过） | `20260901-...-springai-ark-chat-bootstrap` |
 | 迭代 2 | 地基加固 | ① ChatClient Advisor 层（配置化 system prompt + 日志 Advisor 示例，立起 ChatMemory/MCP 挂载点）；② 显式 HTTP 连接池（RestClient/HttpClient5 + WebClient/Netty）；③ 超时 + 3 次指数退避重试（仅网络/429/5xx）；④ SSE 15s 心跳保活 | ✅ 已交付（75 测试全绿：26 既有 + 49 新增；本地真实冒烟 PASS：同步/SSE/心跳帧/400/多轮，冒烟中修复 Advisor 消息数统计 1 处；分支 feat/advisor-resilience-foundation 已推送，commits ae98d61+4da2db4） | `20260902-...-advisor-resilience-foundation` |
 | 迭代 3 | 会话持久化（A） | Spring AI `ChatMemory` 契约 + MyBatis-Plus 落 MySQL 13306（chat_session/chat_message，懒建表+启动 best-effort）；接口加 `sessionId` 三态（null 无状态/`""` 新建/UUID 续接）；SSE 新增 `event:session` 帧；fastjson2 接管 JSON；记忆开关 `app.chat.memory.enabled`（false 全家桶不装配、会话路径 400）；503 `MEMORY_UNAVAILABLE` / 500 `MEMORY_PERSIST_FAILED` | ✅ 已交付（146 测试全绿：75 既有 + 71 新增；真实 MySQL 8 + 方舟冒烟 PASS：自动建表、首轮新建/续接多轮记忆、event:session、成对落库中文 emoji 完整、无状态零 DB；分支 feat/chatmemory-mysql-persistence 已推送 commit ac0febc） | `20260902-...-chatmemory-mysql-persistence` |
-| 迭代 4 | MCP 工具（B） | MCP Client / ToolCallback，模型可调用外部工具（查库、调内部接口、搜文档）；工具以 Advisor/ToolCallback 形式挂载 | ⏳ 待开始 | — |
+| 插入迭代 G | 工具能力底座（G） | DB 驱动的工具注册表：`agent_tool`/`agent_tool_call_log` 两表（懒建表+种子），工具元数据 DB 维护、运行时**动态组装 ToolCallback**（新增同类型工具=插 DB 行不发版）；BUILTIN 日志分析（纯 JDK 扫 logs/：时间窗/级别计数/异常分组/堆栈片段）+ SCRIPT 白名单执行器（canonical 防逃逸、argv 数组禁 sh -c、超时强杀、环境净化、示例脚本）；管理端 `/api/admin/tools` CRUD + 审计分页（**X-Admin-Token 首个鉴权接口**：503 未配置/401 未授权/400 开关关闭）；SSE 新增 `event:tool` 帧 + ToolCallBridge（ToolContext 透传）+ 前端工具调用折叠块；工具结果密钥脱敏、三层去重（requestId+dedupKey+call_id）防流式重试重跑 | ✅ 已交付（后端 **406** 测试全绿：219 既有 + 187 新增；前端 **95** 测试全绿、tsc/build 零错误；真实 MySQL+方舟+Vite proxy 冒烟 SMOKE-1~6 全 PASS **零冒烟修复**：工具全链路/event:tool 帧序/假密钥脱敏/SCRIPT 真实执行/审计/401·400·404；TDD 期实测修复 M7 toolContext 禁 null 值 1 处；分支 feat/db-tool-log-analysis 已推送 commit 4342aff） | `20260904-...-db-tool-log-analysis` |
+| 迭代 4 | MCP 工具（B） | MCP Client / ToolCallback，模型可调用外部工具（查库、调内部接口、搜文档）；工具以 Advisor/ToolCallback 形式挂载。**插入迭代 G 已落地原生 Function Calling + DB 工具目录**，本迭代聚焦 MCP Client 接入外部工具生态（复用 G 的 ToolCallback/审计/管理端/帧协议） | ⏳ 待开始 | — |
 | 迭代 5 | SDD 子 Agent（C） | 任务拆解 → 规划者/执行者多 Agent 编排，对话服务作为底层模型调用能力被复用 | ⏳ 待开始 | — |
 | 待定 | RAG 知识库（E） | PG 15432 + pgvector：文档切片 → embedding → 检索增强问答；可复用 MCP 工具能力 | ⏳ 待开始 | — |
 | 插入迭代 F | 前端对话页（F） | 仓库重构为 `backend/`+`frontend/` 双子目录（T0 纯 git mv，历史保留、146 基线零回归）；后端新增会话管理 REST（`/api/sessions` 列表/历史/重命名/删除，400/404/503 齐备）+ 首轮用户消息自动生成会话标题（20/30 codePoint 截断，best-effort）；前端 Vite5+React18+TS+antd5：fetch 手写 SSE 分帧消费（30s 看门狗、AbortController 双 reason 停止/超时）、会话侧边栏（列表/切换/重命名/删除/骨架/重试，流式中切换阻止）、Markdown 渲染（gfm+highlight，禁 rehype-raw，XSS 回归测试、代码块复制）、Enter/Shift+Enter/IME 输入、自动贴底滚动、错误码差异化文案、草稿与刷新恢复（localStorage 仅存非敏感 UI 状态）；生产同源部署（后端无 CORS，nginx 反代 `proxy_buffering off` 等 SSE 指令） | ✅ 已交付（后端 **219** 测试全绿：146 既有 + 73 新增；前端 **83** 测试全绿、`tsc -b && vite build` 零错误；真实 MySQL 8 + 方舟 + Vite proxy 双进程冒烟 PASS：页面/proxy/会话 CRUD/标题落库/级联删除/三态/400/404 全过；冒烟修复 2 处线网问题——SSE 帧被 fastjson2 JSON 转义（迭代3 潜伏）、MySQL UTC 时间差 8h；分支 feat/frontend-chat-ui 已推送 commits 98f734e+a59e4f8） | `20260903-...-frontend-chat-ui` |
