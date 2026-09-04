@@ -4,9 +4,14 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
 迭代 4 起为前后端双模块：
 
 - `backend/`：同步问答 `POST /api/chat`、SSE 流式问答 `POST /api/chat/stream`、
-  会话管理 REST（`/api/sessions`）+ 服务端会话持久化（MySQL/MyBatis-Plus）。
+  会话管理 REST（`/api/sessions`）+ 服务端会话持久化（MySQL/MyBatis-Plus）；
+  插入迭代 G 起内置 **DB 工具注册表 + Function Calling 闭环**：工具以数据库行注册（内置
+  BUILTIN / 白名单脚本 SCRIPT 两类处理器），对话中模型自动调用，调用过程以 `event:tool`
+  SSE 帧实时回传前端；另有 **管理端 REST**（`/api/admin/**`，X-Admin-Token 鉴权）做工具
+  CRUD、指南热更新与调用审计日志查询。
 - `frontend/`：Vite + React 18 + TypeScript + antd 5 对话页，fetch 手写 SSE 分帧消费流式接口，
-  会话侧边栏（列表/切换/重命名/删除）、Markdown 渲染、停止生成、草稿与刷新恢复。
+  会话侧边栏（列表/切换/重命名/删除）、Markdown 渲染、停止生成、草稿与刷新恢复；
+  工具调用在助手气泡内显示为「🔧 调用工具 xxx」折叠块（进行中转圈/成功耗时/失败错误摘要）。
 
 **前后端同源部署**：后端不启用 CORS，开发期由 Vite proxy、生产期由 nginx 反向代理把 `/api`
 转发到后端，浏览器只访问同源地址（业务代码中只有相对路径 `/api/...`，无硬编码后端主机）。
@@ -115,7 +120,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 java -version    # 期望 openjdk version "17.0.x"（Temurin）
 mvn -v           # 期望 Java version: 17.0.x；若显示 1.8 说明切换失败
 
-# 2) 离线全量测试（无需 Key、无需外网、无需数据库，应全绿；219 测试）
+# 2) 离线全量测试（无需 Key、无需外网、无需数据库，应全绿；406 测试）
 mvn -o test
 
 # 3) 不启动 MySQL、不填 Key，直接启动（验证缺库缺 Key 可启动；无 Key 调对话返回 503 ARK_NOT_CONFIGURED）
@@ -169,6 +174,77 @@ curl -X POST http://localhost:8080/api/chat \
 # 关闭记忆：APP_CHAT_MEMORY_ENABLED=false 重启后记忆 bean 不装配，带 sessionId 的请求 400，无状态不受影响
 ```
 
+### 工具调用与管理端（插入迭代 G）
+
+工具以 **DB 注册表**（`agent_tool` / `agent_tool_call_log` 两表，启动 best-effort 建表 + 种子内置工具）
+驱动：模型每轮对话前挂载当前启用工具，自主决定调用；执行在独立 daemon 线程池，超时/截断/脱敏统一治理，
+每次调用落审计日志。处理器两类：
+
+- **BUILTIN（内置）**：随应用发行，开箱即用。种子内置 `analyze_log_errors`（分析最近 N 分钟日志：
+  ERROR/WARN 统计、典型错误摘录，尾部窗口、扫描三上限保护）；指南文本（guide_md）可在管理端热更新，
+  写后立即对新对话生效。
+- **SCRIPT（白名单脚本）**：`app.tools.script-dir` 目录内、经管理端登记的 shell 脚本，执行器以
+  `/bin/sh <file>` + argv 数组方式运行（禁 `-c`）、环境变量白名单注入、工作目录锁定、超时强杀、
+  输出截断。种子脚本 `log_error_count` **默认禁用**，需管理端启用并人工审计脚本内容后方可使用。
+
+**SSE 工具帧**：流式问答中工具调用过程以 `event:tool` 帧推送（fastjson2 JSON）：
+`event:tool` → `data:{"callId":"<请求ID>|<工具名>|<短随机>","tool":"...","arguments":"{...}",
+"status":"started"}`，终态再发一帧 `status:"succeeded"`（带 `durationMs`）或 `status:"failed"`
+（带 `durationMs` + `error`）；帧序为 session（如有）→ tool(started/succeeded) → message* → done，
+工具静默期同样有 `:keepalive`。前端按 callId 原地更新折叠块；历史消息不重现工具块。
+
+**管理端 REST**（`/api/admin/**`，全部需 `X-Admin-Token` 头，JSON 走 fastjson2）：
+
+```bash
+TOKEN='你的管理端令牌'   # 来自 APP_ADMIN_TOKEN 或 application-local.yml 的 app.admin.token
+
+# 工具列表（不含指南正文，含 guideLength）
+curl -s http://localhost:8080/api/admin/tools -H "X-Admin-Token: $TOKEN"
+# 工具详情（含 inputSchema/handlerConfig/guideMd 全文）
+curl -s http://localhost:8080/api/admin/tools/1 -H "X-Admin-Token: $TOKEN"
+# 新增工具（BUILTIN 登记另一个内置 bean / SCRIPT 登记白名单脚本）
+curl -s -X POST http://localhost:8080/api/admin/tools -H "X-Admin-Token: $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"log_error_count","description":"统计日志 ERROR/WARN 行数",
+       "inputSchema":{"type":"object","properties":{"minutes":{"type":"integer"}}},
+       "handlerType":"SCRIPT","handlerConfig":{"script":"log_error_count.sh"},
+       "enabled":true,"timeoutMs":10000,"outputMaxChars":4000}'
+# 全量更新（PUT）/ 部分更新（PATCH，如热改指南、启停、改超时）
+curl -s -X PATCH http://localhost:8080/api/admin/tools/2 -H "X-Admin-Token: $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"enabled":true}'
+# 删除
+curl -s -X DELETE http://localhost:8080/api/admin/tools/2 -H "X-Admin-Token: $TOKEN"
+# 调用审计日志（0 基分页；可按 toolName/sessionId/status/时间区间过滤）
+curl -s 'http://localhost:8080/api/admin/tool-call-logs?page=0&size=20&status=failed' \
+  -H "X-Admin-Token: $TOKEN"
+```
+
+管理端三语义拦截顺序：**未配置 token（`app.admin.token` 空白）→ 503 `ADMIN_NOT_CONFIGURED`**；
+工具总开关关闭（`app.tools.enabled=false`）→ 400 `TOOLS_DISABLED`；token 错误/缺失 →
+401 `ADMIN_UNAUTHORIZED`（错误体不回显任何配置信息）。工具不存在 → 404 `TOOL_NOT_FOUND`；
+管理端写库/刷新时 DB 不可达 → 503 `TOOLS_UNAVAILABLE`（写操作已落库的情况会 ERROR 日志标注）。
+工具执行面安全：目录白名单 + realpath 防符号链接逃逸、参数仅接受 schema 声明的具名 `--key value`、
+脚本输出与审计中的密钥形态（`ark-...`、Authorization 头等）统一脱敏为 `***REDACTED***`。
+
+**工具相关配置**（全部在 `application.yml` 外置，密钥仅 env / gitignored 的 local 文件注入）：
+
+| 配置项 | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `app.tools.enabled` | `APP_TOOLS_ENABLED` | `true` | 工具总开关；false 时运行时全家桶不装配、对话零工具挂载，管理端 400 |
+| `app.tools.script-dir` | `APP_TOOLS_SCRIPT_DIR` | `scripts` | SCRIPT 白名单根目录（相对 CWD）。**生产务必只读挂载**（如 `mount -o ro` / 容器 readOnlyRootfs + 挂载卷），新脚本上线需人工审计后再在管理端登记启用 |
+| `app.tools.executor-pool-size` | `APP_TOOLS_EXECUTOR_POOL_SIZE` | `4` | 工具执行 daemon 线程池（与模型 reactive 调度隔离） |
+| `app.tools.default-timeout-ms` | — | `30000` | 表行 timeout_ms 缺省；管理端校验硬范围 1~60000ms |
+| `app.tools.default-output-max-chars` | — | `8000` | 表行 output_max_chars 缺省；硬范围 100~100000 |
+| `app.tools.redact-patterns` | — | `[]` | 增补脱敏正则（YAML 列表；启动编译，非法正则仅 WARN 跳过） |
+| `app.tools.builtin.log-dir` | `APP_TOOLS_LOG_DIR` | `logs` | 日志分析根目录（相对 CWD）。**强烈建议配绝对路径**：`mvn spring-boot:run` 的 CWD 是 `backend/`，而 nohup/IDE/jar 启动的 CWD 可能是仓库根或部署目录，相对路径会指向不同位置 |
+| `app.tools.builtin.scan-max-files` | `APP_TOOLS_SCAN_MAX_FILES` | `200` | 单次扫描文件数上限 |
+| `app.tools.builtin.scan-max-bytes-per-file` | `APP_TOOLS_SCAN_MAX_BYTES` | `52428800`（50MB） | 单文件读取字节上限 |
+| `app.tools.builtin.scan-max-lines` | `APP_TOOLS_SCAN_MAX_LINES` | `200000` | 累计行数上限；触顶结果标注 truncated |
+| `app.admin.token` | `APP_ADMIN_TOKEN` | 空 | 管理端令牌；**空白=管理端一律 503**。只从 env 或 `application-local.yml` 注入，不入库、不打日志、不进响应 |
+
+端到端冒烟清单（帧序、CRUD、503/401/400 矩阵、SCRIPT 启停、脱敏、无状态工具调用）见
+`reports/db-tool-smoke-checklist.md`（由流水线 step_8 在真实 MySQL + 方舟 Key 环境执行并回填结论）。
+
 ### 前端（在 `frontend/` 目录执行）
 
 ```bash
@@ -176,7 +252,7 @@ cd frontend
 npm install        # 首次安装依赖（版本已在 package.json 锁定主版本）
 
 npm run dev        # 开发服务器（默认 5173），/api 经 Vite proxy 转发到后端
-npm run test       # vitest 全量单测（jsdom，无需后端；83 测试）
+npm run test       # vitest 全量单测（jsdom，无需后端；95 测试）
 npm run build      # tsc 严格类型检查 + 生产构建（dist/）
 npm run preview    # 本地预览生产构建
 ```
@@ -229,7 +305,7 @@ server {
 
 ```bash
 # 后端（cd backend 后，JDK17）
-mvn -o test                       # 离线全量测试（219 测试）
+mvn -o test                       # 离线全量测试（406 测试）
 mvn -o package -DskipTests        # 编译打包（target/dj-agent-chat-0.0.1-SNAPSHOT.jar）
 mvn dependency:resolve            # 解析依赖（Spring AI M7 从 Maven Central 获取）
 
@@ -276,14 +352,38 @@ backend/src/main/java/com/dj/ai/agentchat/
 │   ├── ChatClientConfig.java          # ChatClient 装配（日志 Advisor、条件 defaultSystem）
 │   ├── http/                          # HttpClient5 连接池（同步）+ Netty ConnectionProvider（流式）
 │   └── retry/ChatRetryConfig.java     # 自定义 RetryTemplate（3 次指数退避、429/5xx/网络故障）
+├── tool/                              # 插入迭代 G：DB 工具注册表 + 调用闭环
+│   ├── ToolProperties / AdminProperties  # app.tools.* / app.admin.* 配置绑定
+│   ├── po/ mapper/                    #   AgentToolPO / AgentToolCallLogPO + MyBatis-Plus Mapper
+│   ├── schema/                        #   ToolSchemaInitializer/Runner（best-effort 建表）+ ToolSeeder（种子内置工具）
+│   ├── registry/                      #   ToolRegistry（volatile 快照，refresh 失败管理端 503/对话降级空集）、HandlerType
+│   ├── handler/                       #   ToolHandler 路由 + ToolExecutionContext/Result；
+│   │   ├── builtin/                   #     BuiltinTool/BuiltinToolHandler + LogAnalysisBuiltinTool（日志分析）
+│   │   └── script/                    #     ScriptToolHandler（/bin/sh argv 数组、环境白名单、超时强杀、输出截断）
+│   ├── security/                      #   PathGuard（目录白名单 + realpath 防逃逸）、SecretRedactor（ark-/Authorization 脱敏）
+│   ├── callback/                      #   DbToolCallback（Spring AI ToolCallback 适配）、ToolCallbackFactory、SkippableToolException
+│   ├── support/                       #   ToolSupport/DefaultToolSupport（挂载）、ToolCallBridge/ToolEvent（调用事件桥）
+│   ├── audit/                         #   ToolAuditService（调用审计落库，best-effort）
+│   ├── admin/                         #   AdminToolController（/api/admin/** CRUD + tool-call-logs）、
+│   │   ├── AdminAuthInterceptor.java  #     X-Admin-Token 拦截（503 未配置 > 400 工具关闭 > 401 未授权）
+│   │   ├── ToolAdminService.java      #     全量校验 + 写后 refresh + DB 故障 503
+│   │   └── dto/                       #     ToolUpsertRequest/ToolListItem/ToolDetail/ToolCallLogView/PageResult
+│   ├── config/                        #   ToolRuntimeConfig（@ConditionalOnProperty 工具运行时）、
+│   │                                  #     ToolAdminWebConfig（常驻：拦截器注册）
+│   └── dto/ToolEventFrame.java        #   event:tool 帧 DTO（fastjson2 序列化，null 字段省略）
 └── exception/                         # ChatNotConfiguredException / ModelCallException /
                                        # InvalidChatRequestException / MemoryUnavailableException(503) /
-                                       # SessionNotFoundException(404) / GlobalExceptionHandler
+                                       # SessionNotFoundException(404) / ToolNotFoundException(404) /
+                                       # ToolsUnavailableException(503) / GlobalExceptionHandler
 backend/src/main/resources/
 ├── application.yml                    # 入库配置（密钥占位、三套存储连接、Hikari 懒启动、
-│                                      #   重试/连接池/心跳/system-prompt、app.chat.memory.* 全部外置）
+│                                      #   重试/连接池/心跳/system-prompt、app.chat.memory.*、
+│                                      #   app.tools.*/app.admin.* 全部外置）
 ├── db/chat-memory-schema.sql          # chat_session / chat_message 建表脚本（CREATE TABLE IF NOT EXISTS）
+├── skills/                            # 种子内置工具指南 md（analyze_log_errors / log_error_count）
 └── application-local.yml.example      # 本地凭证模板（复制为 application-local.yml，已被 gitignore）
+backend/scripts/
+└── log_error_count.sh                 # SCRIPT 示例脚本（只读统计 ERROR/WARN；种子默认禁用，启用前人工审计）
 
 frontend/
 ├── vite.config.ts                     # Vite + vitest（jsdom）；loadEnv 读 VITE_DEV_PROXY_TARGET 配 /api proxy
@@ -296,10 +396,13 @@ frontend/
     │                                  #   useAutoScroll（贴底阈值 80px/上滑脱离/回到底部）、
     │                                  #   useLocalDraft（草稿按会话作用域持久化）
     ├── components/                    # AppLayout / SessionSidebar / MessageList / MessageBubble /
+    │                                  #   ToolCallBlocks（插入迭代 G：🔧 工具调用折叠块，
+    │                                  #   进行中转圈/成功耗时/失败展开错误，手动开合覆盖自动策略）/
     │                                  #   MarkdownView（react-markdown+gfm+highlight，禁 rehype-raw、
     │                                  #   代码块复制）/ ChatInput（Enter 发送/Shift+Enter/IME 组词/停止）/
     │                                  #   EmptyState（示例卡片）/ InlineError（Alert + toast）
-    ├── utils/                         # sseFrames（SSE 分帧纯函数）、errors（错误码文案）、
+    ├── utils/                         # sseFrames（SSE 分帧纯函数，含 event:tool 解析/未知事件忽略）、
+    │                                  #   errors（错误码文案）、
     │                                  #   title（前后端同规则截断）、storage（localStorage 安全封装）
     └── types/                         # 前后端契约 TS 类型
 ```
@@ -313,8 +416,10 @@ frontend/
 - **缺库可启动**：`spring.datasource.hikari.initialization-fail-timeout: -1` 关闭 Hikari 启动快速失败；
   Lettuce 懒连接；不引 JPA/actuator；Postgres 走 `app.storage.postgres` 自定义命名空间不绑定自动配置。
 - **SSE 事件协议**：（新建会话时先发）`event:session`（`data:{"sessionId":"<UUID>"}`）
-  → （空闲期）`:keepalive` 注释帧 → `event:message`（`data:{"content":"片段"}`，多帧）
-  → `event:done`（`data:[DONE]`）；记忆阶段失败（DB 不可达等）在订阅前同步抛出、
+  → （工具调用时）`event:tool`（`data:{callId,tool,arguments,status,...}`，started 与终态各一帧；
+  仅插入迭代 G 工具启用且本轮发生调用时出现）→ （空闲期）`:keepalive` 注释帧 →
+  `event:message`（`data:{"content":"片段"}`，多帧）→ `event:done`（`data:[DONE]`）；
+  记忆阶段失败（DB 不可达等）在订阅前同步抛出、
   以 `event:error` 返回且**不会**先发出 session 帧或启动心跳；异常或缺 Key 同样发
   `event:error`（data 为错误 JSON）后立即关闭，不无限挂起；超时 120s（`app.chat.sse-timeout-ms`）。
 - **前端 SSE 消费**：`fetch` + ReadableStream reader + `TextDecoder({stream:true})` 手写分帧
@@ -326,7 +431,12 @@ frontend/
   404 `SESSION_NOT_FOUND`（会话不存在或已删除）/
   503 `ARK_NOT_CONFIGURED`（缺 Key）/ 502 `MODEL_CALL_FAILED`（模型调用失败）/
   503 `MEMORY_UNAVAILABLE`（记忆读写阶段 DB 不可达，仅会话路径；无状态路径不受影响）/
-  500 `MEMORY_PERSIST_FAILED`（仅同步路径：模型已成功但本轮落库失败，提示重试本轮）。
+  500 `MEMORY_PERSIST_FAILED`（仅同步路径：模型已成功但本轮落库失败，提示重试本轮）/
+  404 `TOOL_NOT_FOUND`（管理端操作的工具 id 不存在）/
+  503 `TOOLS_UNAVAILABLE`（管理端写库或注册表刷新时 DB 不可达）/
+  400 `TOOLS_DISABLED`（`app.tools.enabled=false` 时访问 `/api/admin/**`）/
+  503 `ADMIN_NOT_CONFIGURED`（未配置 `app.admin.token`）/
+  401 `ADMIN_UNAUTHORIZED`（管理端 token 缺失或错误）。
   错误响应不含堆栈与密钥；流式路径落库失败仅 ERROR 日志（不影响已推送片段与 done）。
   前端按错误码差异化文案（如 503 提示可关闭「记住本次对话」无状态继续）。
 - **会话管理（迭代4）**：后端新增 `SessionManager` 接口 + MyBatis 实现，与记忆全家桶同生命周期
@@ -348,6 +458,13 @@ frontend/
   `app.chat.memory.max-history`（`APP_CHAT_MEMORY_MAX_HISTORY`，默认 20，续接加载最近 N 条；
   落库全量不裁剪）、`app.chat.memory.init-on-startup`（`APP_CHAT_MEMORY_INIT_ON_STARTUP`，
   默认 true，启动 best-effort 建表；false 时首次记忆路径懒触发建表，DB 不可达同样自愈）。
+- **工具调用闭环（插入迭代 G）**：工具注册表在 DB（`agent_tool` 表，启动 best-effort 建表 + 种子），
+  `ToolRegistry` 持有 volatile 快照——对话路径每次挂载读快照（DB 故障降级为零工具，不拖垮对话），
+  管理端写操作后强制 `refresh()`（失败 503，保证管理端强一致）；工具在独立 daemon 线程池执行，
+  调用起止经 `ToolCallBridge` 发 `event:tool` 帧（流结束后迟到的帧一律丢弃），审计 best-effort 落
+  `agent_tool_call_log`；脚本执行受目录白名单/realpath/argv 数组/环境白名单/超时强杀/输出截断多重约束，
+  输出与审计中的密钥形态统一脱敏 `***REDACTED***`；工具帧与管理端 JSON 全部走 fastjson2
+  （SSE `.data(obj, APPLICATION_JSON)`，null 字段省略故 started 帧无 durationMs/error 键）。
 - **fastjson2（迭代3）**：`FastJsonWebConfig` 以 `extendMessageConverters(converters.add(0,...))`
   把 `FastJsonHttpMessageConverter` 置于通用 Jackson 之前，全线 JSON 线网格式由 fastjson2 治理
   （UTF-8、默认省略 null 字段——故无状态响应不回显 sessionId、SSE 无状态流不发 session 帧；

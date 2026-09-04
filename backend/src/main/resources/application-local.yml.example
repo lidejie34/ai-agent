@@ -18,3 +18,15 @@ spring:
 # logging:
 #   level:
 #     com.dj.ai.agentchat: debug
+
+# 插入迭代 G：管理端鉴权令牌（/api/admin/** 需 X-Admin-Token 头）。
+# 推荐用环境变量 APP_ADMIN_TOKEN 注入，也可在本文件设置 app.admin.token；
+# 空白=管理端一律 503 ADMIN_NOT_CONFIGURED。令牌勿入库、勿写日志。
+# app:
+#   admin:
+#     token: 在此填入管理端访问令牌
+# 工具目录（可选）：SCRIPT 白名单目录与日志分析目录建议配绝对路径：
+#   tools:
+#     script-dir: /opt/dj-agent/scripts
+#     builtin:
+#       log-dir: /opt/dj-agent/logs

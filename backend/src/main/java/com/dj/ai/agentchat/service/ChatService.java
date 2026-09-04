@@ -9,6 +9,8 @@ import com.dj.ai.agentchat.exception.MemoryPersistException;
 import com.dj.ai.agentchat.exception.MemoryUnavailableException;
 import com.dj.ai.agentchat.exception.ModelCallException;
 import com.dj.ai.agentchat.memory.ConversationStore;
+import com.dj.ai.agentchat.tool.support.ToolMount;
+import com.dj.ai.agentchat.tool.support.ToolSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -77,6 +79,11 @@ public class ChatService {
     /** 续接加载最近 N 条历史（FR-7，默认 20）。 */
     private final int memoryMaxHistory;
     private final boolean memoryEnabled;
+    /**
+     * 工具挂载支持（插入迭代 G；app.tools.enabled=false 时无 bean → null → 零挂载，
+     * 与迭代 F 逐字节等价，AC-63）。
+     */
+    private final ObjectProvider<ToolSupport> toolSupportProvider;
 
     @Autowired
     public ChatService(ChatClient chatClient,
@@ -87,7 +94,8 @@ public class ChatService {
                        @Value("${app.chat.retry.stream.max-backoff:10s}") Duration streamRetryMaxBackoff,
                        ObjectProvider<ConversationStore> conversationStoreProvider,
                        @Value("${app.chat.memory.max-history:20}") int memoryMaxHistory,
-                       @Value("${app.chat.memory.enabled:true}") boolean memoryEnabled) {
+                       @Value("${app.chat.memory.enabled:true}") boolean memoryEnabled,
+                       ObjectProvider<ToolSupport> toolSupportProvider) {
         this.chatClient = chatClient;
         this.apiKey = apiKey;
         this.configuredModel = configuredModel;
@@ -97,15 +105,16 @@ public class ChatService {
         this.storeProvider = conversationStoreProvider;
         this.memoryMaxHistory = memoryMaxHistory;
         this.memoryEnabled = memoryEnabled;
+        this.toolSupportProvider = toolSupportProvider;
     }
 
     /**
      * 测试/便捷构造（与迭代 1 签名兼容）：流式重试退避取毫秒级，离线测试快速确定、不真实等待；
-     * 不带记忆存储（无状态行为；会话路径按「记忆未启用」400）。
+     * 不带记忆存储（无状态行为；会话路径按「记忆未启用」400）、不带工具挂载。
      */
     public ChatService(ChatClient chatClient, String apiKey, String configuredModel) {
         this(chatClient, apiKey, configuredModel, 3,
-                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true);
+                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true, null);
     }
 
     /**
@@ -115,7 +124,7 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, true);
+                new FixedObjectProvider<>(store), memoryMaxHistory, true, null);
     }
 
     /**
@@ -125,7 +134,7 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory, boolean memoryEnabled) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled);
+                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled, null);
     }
 
     /**
@@ -136,11 +145,15 @@ public class ChatService {
         ensureConfigured();
         MemoryContext memory = prepareMemory(request);
         List<Message> messages = assembleMessages(request, memory);
-        log.debug("同步调用模型: 消息总数={}, 配置model={}, sessionId={}",
-                messages.size(), configuredModel, memory.sessionId());
+        ToolMount toolMount = mountTools(memory.sessionId());
+        log.debug("同步调用模型: 消息总数={}, 配置model={}, sessionId={}, 工具数={}",
+                messages.size(), configuredModel, memory.sessionId(),
+                toolMount == null ? 0 : toolMount.callbacks().size());
         org.springframework.ai.chat.model.ChatResponse aiResponse;
         try {
-            aiResponse = chatClient.prompt().messages(messages).call().chatResponse();
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
+            applyTools(spec, toolMount);
+            aiResponse = spec.call().chatResponse();
         } catch (InvalidChatRequestException | ChatNotConfiguredException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -172,8 +185,11 @@ public class ChatService {
         ensureConfigured();
         MemoryContext memory = prepareMemory(request);
         List<Message> messages = assembleMessages(request, memory);
-        log.debug("流式调用模型: 消息总数={}, 配置model={}, sessionId={}",
-                messages.size(), configuredModel, memory.sessionId());
+        // 工具挂载必须在 Flux.defer 之外创建：requestId/bridge 跨重订阅（重试）稳定，dedupKey 才稳定（S4）
+        ToolMount toolMount = mountTools(memory.sessionId());
+        log.debug("流式调用模型: 消息总数={}, 配置model={}, sessionId={}, 工具数={}",
+                messages.size(), configuredModel, memory.sessionId(),
+                toolMount == null ? 0 : toolMount.callbacks().size());
         // 边界说明（M7 实证）：
         // 1) Spring AI 的 RetryTemplate 只覆盖同步 internalCall，流式 internalStream/stream
         //    不引用 RetryTemplate；此处仅在应用层对「建连/首片段前」的瞬时故障（429/5xx/网络 IO）
@@ -183,15 +199,45 @@ public class ChatService {
         //    抛 "No AroundAdvisor available to execute"，故整个 ChatClient 流式装配必须包在
         //    Flux.defer 中：每次（重）订阅都重建 Advisor 链并重新调用模型（重试才真正生效）。
         StringBuilder aggregated = new StringBuilder();
-        Flux<String> deferred = Flux.defer(
-                () -> chatClient.prompt().messages(messages).stream().content());
+        Flux<String> deferred = Flux.defer(() -> {
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
+            applyTools(spec, toolMount);
+            return spec.stream().content();
+        });
         Flux<String> chunks = withFirstChunkRetry(deferred)
                 .onErrorMap(RuntimeException.class,
                         e -> (e instanceof ModelCallException) ? e : new ModelCallException(STREAM_FAILED_MESSAGE, e))
                 .doOnNext(aggregated::append)
                 .publishOn(reactor.core.scheduler.Schedulers.boundedElastic())
                 .doOnComplete(() -> persistStreamTurn(memory, request.message(), aggregated));
-        return new ChatStreamResult(memory.stateful() ? memory.sessionId() : null, chunks);
+        return new ChatStreamResult(memory.stateful() ? memory.sessionId() : null, chunks,
+                toolMount == null ? null : toolMount.bridge());
+    }
+
+    /**
+     * 请求级工具挂载（插入迭代 G）：工具支持缺失（开关关闭）返回 null；
+     * 挂载过程任何异常都降级为无工具，绝不阻断对话（注册中心内部已对 DB 故障空集降级）。
+     */
+    private ToolMount mountTools(String sessionId) {
+        ToolSupport support = toolSupportProvider == null ? null : toolSupportProvider.getIfAvailable();
+        if (support == null) {
+            return null;
+        }
+        try {
+            return support.mountTools(sessionId);
+        } catch (RuntimeException e) {
+            log.warn("工具挂载失败，本次对话降级为无工具: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 空挂载不触发 .tools()/.toolContext()——请求形态与迭代 F 逐字节等价（AC-63）。
+     */
+    private static void applyTools(ChatClient.ChatClientRequestSpec spec, ToolMount mount) {
+        if (mount != null && !mount.callbacks().isEmpty()) {
+            spec.tools(mount.callbacks()).toolContext(mount.toolContext());
+        }
     }
 
     /**

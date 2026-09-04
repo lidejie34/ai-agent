@@ -204,6 +204,60 @@ body {
   margin-top: 8px;
 }
 
+/* 工具调用折叠块（插入迭代 G，T11） */
+.tool-call-blocks {
+  margin-bottom: 8px;
+}
+
+.tool-call-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.tool-call-title {
+  font-weight: 500;
+}
+
+.tool-call-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tool-call-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #1677ff;
+  font-size: 12px;
+}
+
+.tool-call-tag {
+  margin-inline-end: 0;
+}
+
+.tool-call-args {
+  font-size: 12px;
+  color: #4e5969;
+  word-break: break-all;
+}
+
+.tool-call-args code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #f7f8fa;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.tool-call-error {
+  color: #cf1322;
+  font-size: 12px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
 .back-to-bottom {
   position: absolute;
   bottom: 16px;

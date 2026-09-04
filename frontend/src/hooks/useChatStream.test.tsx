@@ -98,6 +98,76 @@ describe('useChatStream 续接（AC-19 请求体半）', () => {
   })
 })
 
+describe('useChatStream 工具帧（插入迭代 G，AC-66/68/69）', () => {
+  it('event:tool 帧按 callId upsert 到当前助手消息：started→终态折叠为一块', async () => {
+    const callId = 'req-1|analyze_log|aaa'
+    const fetchFn = mockFetchOnce(
+      sseResponse([
+        encodeSse.tool({ callId, tool: 'analyze_log', arguments: '{"minutes":30}', status: 'started' }),
+        encodeSse.tool({ callId, tool: 'analyze_log', arguments: '{"minutes":30}', status: 'succeeded', durationMs: 420 }),
+        encodeSse.chunk('日志分析完毕'),
+        encodeSse.done(),
+      ]),
+    )
+    const { result } = renderHook(() => useChatStream({}))
+
+    await act(async () => {
+      await result.current.send('分析日志')
+    })
+
+    expect(fetchFn).toHaveBeenCalled()
+    const assistant = result.current.messages[1]
+    expect(assistant.role).toBe('assistant')
+    expect(assistant.toolCalls).toHaveLength(1) // 同 callId 折叠，不追加
+    const call = assistant.toolCalls?.[0]
+    expect(call).toMatchObject({
+      callId,
+      tool: 'analyze_log',
+      status: 'succeeded',
+      durationMs: 420,
+    })
+    expect(assistant.content).toBe('日志分析完毕')
+  })
+
+  it('多个工具调用按到达顺序追加；failed 帧带 error', async () => {
+    mockFetchOnce(
+      sseResponse([
+        encodeSse.tool({ callId: 'c1', tool: 'analyze_log', status: 'started' }),
+        encodeSse.tool({ callId: 'c2', tool: 'log_error_count', status: 'started' }),
+        encodeSse.tool({ callId: 'c1', tool: 'analyze_log', status: 'succeeded', durationMs: 10 }),
+        encodeSse.tool({ callId: 'c2', tool: 'log_error_count', status: 'failed', durationMs: 3000, error: '工具执行超时' }),
+        encodeSse.done(),
+      ]),
+    )
+    const { result } = renderHook(() => useChatStream({}))
+
+    await act(async () => {
+      await result.current.send('看看')
+    })
+
+    const calls = result.current.messages[1].toolCalls ?? []
+    expect(calls.map((c) => c.callId)).toEqual(['c1', 'c2'])
+    expect(calls[0].status).toBe('succeeded')
+    expect(calls[1].status).toBe('failed')
+    expect(calls[1].error).toBe('工具执行超时')
+  })
+
+  it('历史消息（showHistory）不携带 toolCalls', async () => {
+    mockFetchOnce(sseResponse([encodeSse.done()]))
+    const { result } = renderHook(() => useChatStream({}))
+
+    act(() => {
+      result.current.showHistory(SID, [
+        { role: 'user', content: '旧问题', createdAt: '2026-09-03 09:00:00' },
+        { role: 'assistant', content: '旧回答', createdAt: '2026-09-03 09:00:01' },
+      ])
+    })
+
+    expect(result.current.messages).toHaveLength(2)
+    expect(result.current.messages.every((m) => m.toolCalls === undefined)).toBe(true)
+  })
+})
+
 describe('useChatStream 停止生成（AC-21）', () => {
   it('stop() 触发 abort；片段保留并标记已停止；无错误；输入恢复', async () => {
     const sse = controllableSse()

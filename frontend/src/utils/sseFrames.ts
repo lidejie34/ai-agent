@@ -1,4 +1,4 @@
-import type { ApiError, SseFrame } from '../types'
+import type { ApiError, SseFrame, ToolCallInfo, ToolCallStatus } from '../types'
 
 // SSE 分帧纯函数（无 IO，可单测）。以 \n\n 分事件块（兼容 \r\n\r\n），
 // 解析 event:/data: 行、注释帧（:开头）、多 data 行按 \n 拼接；
@@ -41,9 +41,33 @@ export function parseSseBlock(block: string): SseFrame | null {
       return { kind: 'done' } // data 为字面量 [DONE]，不解析
     case 'error':
       return { kind: 'error', error: JSON.parse(data) as ApiError }
+    case 'tool':
+      return parseToolFrame(data)
     default:
-      return null
+      return null // 未知 event（旧后端/新事件）天然忽略（AC-66 兼容）
   }
+}
+
+/** 解析 event:tool 帧；字段缺失或 status 非法 → null（不炸分帧循环）。 */
+function parseToolFrame(data: string): SseFrame | null {
+  let obj: Record<string, unknown>
+  try {
+    obj = JSON.parse(data) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  const { callId, tool, arguments: args, status, durationMs, error } = obj
+  if (typeof callId !== 'string' || typeof tool !== 'string') return null
+  if (status !== 'started' && status !== 'succeeded' && status !== 'failed') return null
+  const info: ToolCallInfo = {
+    callId,
+    tool,
+    arguments: typeof args === 'string' ? args : '',
+    status: status as ToolCallStatus,
+  }
+  if (typeof durationMs === 'number') info.durationMs = durationMs
+  if (typeof error === 'string') info.error = error
+  return { kind: 'tool', info }
 }
 
 /**

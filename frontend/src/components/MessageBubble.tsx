@@ -1,5 +1,6 @@
 import { Tag } from 'antd'
 import MarkdownView from './MarkdownView'
+import ToolCallBlocks from './ToolCallBlocks'
 import { errorCodeToText } from '../utils/errors'
 import type { ChatMessage } from '../types'
 
@@ -18,6 +19,10 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
           <div className="bubble-text">{message.content}</div>
         ) : (
           <>
+            {/* 工具调用折叠块：仅助手消息、正文 Markdown 上方（历史消息无 toolCalls，AC-68） */}
+            {message.toolCalls && message.toolCalls.length > 0 && (
+              <ToolCallBlocks toolCalls={message.toolCalls} />
+            )}
             {message.content ? (
               <MarkdownView content={message.content} />
             ) : message.status === 'streaming' ? null : (

@@ -148,3 +148,30 @@ app:
         max-attempts: 3
         min-backoff: 1s
         max-backoff: 10s
+
+  # ---- 插入迭代 G：DB 工具注册表 + 工具调用闭环 + 日志分析工具 ----
+  tools:
+    # 工具总开关：false 时工具运行时全家桶不装配（Mapper 不扫描、对话零工具挂载），
+    # 管理端 web 层常驻但被拦截器挡为 400 TOOLS_DISABLED（AC-2）。
+    enabled: ${APP_TOOLS_ENABLED:true}
+    # SCRIPT 工具白名单根目录（相对 CWD；生产只读挂载，强烈建议配绝对路径）。
+    script-dir: ${APP_TOOLS_SCRIPT_DIR:scripts}
+    # 工具执行专用 daemon 线程池大小（与模型 boundedElastic 隔离，避免池饥饿）。
+    executor-pool-size: ${APP_TOOLS_EXECUTOR_POOL_SIZE:4}
+    # 表行 timeout_ms / output_max_chars 缺省值；timeout 硬上限 60000（管理端校验拦截超限）。
+    default-timeout-ms: 30000
+    default-output-max-chars: 8000
+    # 增补脱敏正则（可选；启动编译为 Pattern，编译失败仅 WARN 跳过该条）。
+    redact-patterns: []
+    builtin:
+      # 日志分析根目录（相对 CWD；mvn CWD=backend/ vs nohup CWD=仓库根有差异，建议绝对路径）。
+      log-dir: ${APP_TOOLS_LOG_DIR:logs}
+      # 扫描三上限：文件数 / 单文件字节（50MB）/ 累计行数；触顶停止并标注 truncated。
+      scan-max-files: ${APP_TOOLS_SCAN_MAX_FILES:200}
+      scan-max-bytes-per-file: ${APP_TOOLS_SCAN_MAX_BYTES:52428800}
+      scan-max-lines: ${APP_TOOLS_SCAN_MAX_LINES:200000}
+
+  # ---- 插入迭代 G：管理端鉴权（/api/admin/**）----
+  # token 空白=未配置 → 管理端一律 503 ADMIN_NOT_CONFIGURED；仅 env / application-local.yml 注入，不入库。
+  admin:
+    token: ${APP_ADMIN_TOKEN:}

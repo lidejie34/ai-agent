@@ -67,6 +67,28 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "MEMORY_PERSIST_FAILED", e.getMessage());
     }
 
+    @ExceptionHandler(ToolNotFoundException.class)
+    public ResponseEntity<ApiError> handleToolNotFound(ToolNotFoundException e) {
+        // 管理端 GET/PUT/PATCH/DELETE 工具 ID 无对应行 → 404
+        log.warn("工具不存在: {}", e.getMessage());
+        return build(HttpStatus.NOT_FOUND, "TOOL_NOT_FOUND", e.getMessage());
+    }
+
+    @ExceptionHandler(ToolsUnavailableException.class)
+    public ResponseEntity<ApiError> handleToolsUnavailable(ToolsUnavailableException e) {
+        // 管理端 DB 访问失败/写后刷新失败 → 503（数据可能已落库，提示稍后重试）
+        log.warn("工具服务不可用: {}", e.getMessage());
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "TOOLS_UNAVAILABLE", e.getMessage());
+    }
+
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> handleTypeMismatch(
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException e) {
+        // 路径/查询参数类型转换失败（如 /tools/abc、page=xyz）→ 400 结构化响应
+        log.debug("参数类型转换失败: {}", e.getMessage());
+        return build(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "请求参数类型错误: " + e.getName());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception e) {
         log.error("未处理异常", e);

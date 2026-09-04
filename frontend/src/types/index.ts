@@ -10,6 +10,22 @@ export interface ApiError {
 
 export type ChatRole = 'user' | 'assistant'
 
+/** 工具调用状态（插入迭代 G，event:tool 帧）：started→succeeded/failed。 */
+export type ToolCallStatus = 'started' | 'succeeded' | 'failed'
+
+/**
+ * 一次工具调用的折叠块数据（插入迭代 G）。
+ * callId 为幂等键（requestId|tool|sha1），started 与终态帧同 callId upsert 折叠。
+ */
+export interface ToolCallInfo {
+  callId: string
+  tool: string
+  arguments: string
+  status: ToolCallStatus
+  durationMs?: number
+  error?: string
+}
+
 /** 界面消息；流式助手消息 content 逐帧累积。 */
 export interface ChatMessage {
   id: string
@@ -19,6 +35,8 @@ export interface ChatMessage {
   status?: MessageStatus
   /** 流失败时挂在助手消息上（服务端 ApiError 或网络/看门狗 NetworkError） */
   error?: ApiError | NetworkError
+  /** 仅当轮流式助手消息持有（工具调用折叠块）；历史消息无此字段（AC-68） */
+  toolCalls?: ToolCallInfo[]
 }
 
 export type MessageStatus = 'done' | 'streaming' | 'stopped' | 'error'
@@ -29,6 +47,7 @@ export type SseFrame =
   | { kind: 'chunk'; content: string }
   | { kind: 'done' }
   | { kind: 'error'; error: ApiError }
+  | { kind: 'tool'; info: ToolCallInfo } // event:tool 工具生命周期帧（插入迭代 G）
   | { kind: 'comment' } // :keepalive 等，仅重置看门狗，不产生界面消息
 
 /** 会话列表项；title/preview 可能为 null（fastjson2 省略键，按可选兜底）。 */

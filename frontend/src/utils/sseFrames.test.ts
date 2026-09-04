@@ -27,6 +27,40 @@ describe('parseSseBlock', () => {
     expect(parseSseBlock(':keepalive')).toEqual({ kind: 'comment' })
   })
 
+  it('event:tool started 帧解析为 tool info（无 durationMs/error）', () => {
+    const payload = { callId: 'req-1|analyze_log|abc', tool: 'analyze_log', arguments: '{"minutes":30}', status: 'started' }
+    const f = parseSseBlock(`event:tool\ndata:${JSON.stringify(payload)}`)
+    expect(f).toEqual({ kind: 'tool', info: payload })
+  })
+
+  it('event:tool succeeded 帧带 durationMs，failed 帧带 error', () => {
+    const ok = parseSseBlock(
+      `event:tool\ndata:${JSON.stringify({ callId: 'c1', tool: 't', arguments: '{}', status: 'succeeded', durationMs: 42 })}`,
+    )
+    expect(ok).toEqual({
+      kind: 'tool',
+      info: { callId: 'c1', tool: 't', arguments: '{}', status: 'succeeded', durationMs: 42 },
+    })
+
+    const bad = parseSseBlock(
+      `event:tool\ndata:${JSON.stringify({ callId: 'c2', tool: 't', arguments: '{}', status: 'failed', durationMs: 3000, error: '工具执行超时' })}`,
+    )
+    expect(bad).toEqual({
+      kind: 'tool',
+      info: { callId: 'c2', tool: 't', arguments: '{}', status: 'failed', durationMs: 3000, error: '工具执行超时' },
+    })
+  })
+
+  it('event:tool 帧字段缺失/非法 status/非 JSON → null（不炸分帧）', () => {
+    expect(parseSseBlock('event:tool\ndata:{"tool":"t","status":"started"}')).toBeNull() // 缺 callId
+    expect(parseSseBlock('event:tool\ndata:{"callId":"c","tool":"t","status":"done"}')).toBeNull() // 非法 status
+    expect(parseSseBlock('event:tool\ndata:not-json')).toBeNull()
+  })
+
+  it('未知 event 名仍 → null（旧后端/新事件兼容）', () => {
+    expect(parseSseBlock('event:future-stuff\ndata:{"x":1}')).toBeNull()
+  })
+
   it('缺省 event 名按 message 处理', () => {
     const f = parseSseBlock('data:{"content":"x"}')
     expect(f).toEqual({ kind: 'chunk', content: 'x' })

@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { streamChat } from '../api/sse'
-import type { ApiError, ChatMessage, ChatRole, ChatStatus, NetworkError, SessionMessageView } from '../types'
+import type { ApiError, ChatMessage, ChatRole, ChatStatus, NetworkError, SessionMessageView, ToolCallInfo } from '../types'
 
 let idSeq = 0
 function uid(prefix: string): string {
@@ -55,6 +55,26 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     )
   }, [])
 
+  /**
+   * 工具帧按 callId upsert 到当前流式助手消息（插入迭代 G，AC-66/69）：
+   * 同 callId（started→终态）合并状态，新 callId 按到达顺序追加；
+   * 只挂当前助手消息，历史/新会话天然不带 toolCalls。
+   */
+  const upsertToolCall = useCallback((id: string, info: ToolCallInfo) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== id) return m
+        const existing = m.toolCalls ?? []
+        const idx = existing.findIndex((t) => t.callId === info.callId)
+        const toolCalls =
+          idx >= 0
+            ? existing.map((t, i) => (i === idx ? { ...t, ...info } : t))
+            : [...existing, info]
+        return { ...m, toolCalls }
+      }),
+    )
+  }, [])
+
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim()
@@ -88,6 +108,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
           options.onSessionsChanged?.()
         },
         onChunk: (chunk) => appendChunk(assistantId, chunk),
+        onTool: (info) => upsertToolCall(assistantId, info),
         onDone: () => {
           patchAssistant(assistantId, { status: 'done' })
           controllerRef.current = null
@@ -108,7 +129,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         },
       })
     },
-    [appendChunk, patchAssistant, options],
+    [appendChunk, patchAssistant, upsertToolCall, options],
   )
 
   const stop = useCallback(() => {

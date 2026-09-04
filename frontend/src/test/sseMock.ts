@@ -13,6 +13,17 @@ export const encodeSse = {
   error: (e: ApiError): string =>
     `event:error\ndata:${JSON.stringify(e)}\n\n`,
   comment: (text = 'keepalive'): string => `:${text}\n\n`,
+  tool: (info: {
+    callId: string
+    tool: string
+    arguments?: string
+    status: 'started' | 'succeeded' | 'failed'
+    durationMs?: number
+    error?: string
+  }): string => {
+    const payload = { arguments: '', ...info }
+    return `event:tool\ndata:${JSON.stringify(payload)}\n\n`
+  },
 }
 
 /**

@@ -10,6 +10,8 @@ import com.dj.ai.agentchat.service.ChatService;
 import com.dj.ai.agentchat.service.ChatStreamResult;
 import com.dj.ai.agentchat.sse.ScheduledHeartbeat;
 import com.dj.ai.agentchat.sse.SseHeartbeatScheduler;
+import com.dj.ai.agentchat.tool.dto.ToolEventFrame;
+import com.dj.ai.agentchat.tool.support.ToolCallBridge;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -120,6 +122,21 @@ public class ChatController {
         // 订阅成功拿到 Flux 后再启动心跳：订阅前失败 / session 帧发送失败路径不会产生心跳任务
         ScheduledHeartbeat heartbeat = startHeartbeat(emitter);
 
+        // 工具事件桥接（插入迭代 G）：工具线程 publish 的 started/终态事件在此转 event:tool 帧；
+        // 帧到达同样重置心跳计时。五条终止路径全部 detach——abort/结束后迟到的工具事件丢弃（AC-69）
+        ToolCallBridge toolBridge = result.toolBridge();
+        if (toolBridge != null) {
+            toolBridge.setSink(event -> {
+                log.debug("SSE推送工具事件: tool={}, status={}", event.toolName(), event.status());
+                boolean sent = sendEvent(emitter, SseEmitter.event()
+                        .name("tool")
+                        .data(ToolEventFrame.from(event), MediaType.APPLICATION_JSON));
+                if (sent) {
+                    resetHeartbeat(heartbeat);
+                }
+            });
+        }
+
         Flux<String> flux = result.chunks();
         Disposable subscription = flux.subscribe(
                 chunk -> {
@@ -134,36 +151,47 @@ public class ChatController {
                 error -> {
                     log.warn("SSE流式对话异常: 已推送片段数={}, 耗时={}ms, 原因={}",
                             chunkCount.get(), System.currentTimeMillis() - start, error.getMessage());
+                    detachBridge(toolBridge);
                     sendErrorAndComplete(emitter, error);
                     cancelHeartbeat(heartbeat);
                 },
                 () -> {
                     log.info("SSE流式对话完成: 推送片段数={}, 耗时={}ms",
                             chunkCount.get(), System.currentTimeMillis() - start);
+                    detachBridge(toolBridge);
                     sendEvent(emitter, SseEmitter.event().name("done").data("[DONE]"));
                     emitter.complete();
                     cancelHeartbeat(heartbeat);
                 });
 
-        // 超时 / 断连：取消订阅并停止心跳（四条退出路径全覆盖）
+        // 超时 / 断连：取消订阅并停止心跳（五条退出路径全覆盖，均摘除工具桥 sink）
         emitter.onTimeout(() -> {
             log.warn("SSE流式对话超时: 已推送片段数={}, 耗时={}ms",
                     chunkCount.get(), System.currentTimeMillis() - start);
+            detachBridge(toolBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
             emitter.complete();
         });
         emitter.onError(t -> {
             log.debug("SSE连接异常（客户端可能已断开）: {}", t.getMessage());
+            detachBridge(toolBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
         });
         emitter.onCompletion(() -> {
+            detachBridge(toolBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
         });
 
         return emitter;
+    }
+
+    private static void detachBridge(@Nullable ToolCallBridge toolBridge) {
+        if (toolBridge != null) {
+            toolBridge.detach();
+        }
     }
 
     // ---- 心跳 ----

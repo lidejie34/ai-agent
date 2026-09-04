@@ -1,4 +1,4 @@
-import type { ApiError, NetworkError } from '../types'
+import type { ApiError, NetworkError, ToolCallInfo } from '../types'
 import { drainFrames } from '../utils/sseFrames'
 import { isWatchdogTimeout, networkError, parseErrorResponse, watchdogTimeoutError } from './http'
 
@@ -11,6 +11,8 @@ export const WATCHDOG_MS = 30_000
 export interface StreamHandlers {
   onSession?: (sessionId: string) => void
   onChunk: (content: string) => void
+  /** event:tool 工具生命周期帧（插入迭代 G）：按 callId upsert 折叠块 */
+  onTool?: (info: ToolCallInfo) => void
   onDone: () => void
   onError: (error: ApiError | NetworkError) => void
   onAbort: () => void
@@ -96,6 +98,9 @@ export async function streamChat(
             break
           case 'chunk':
             handlers.onChunk(f.content)
+            break
+          case 'tool':
+            handlers.onTool?.(f.info)
             break
           case 'done':
             clearTimer()
