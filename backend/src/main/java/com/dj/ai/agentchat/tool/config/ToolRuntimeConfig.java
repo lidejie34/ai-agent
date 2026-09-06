@@ -172,8 +172,11 @@ public class ToolRuntimeConfig {
      * 空集/故障返回 null → 零挂载（与迭代 F 逐字节等价）。
      */
     @Bean
-    public ToolSupport toolSupport(ToolRegistry toolRegistry) {
-        return new DefaultToolSupport(toolRegistry);
+    public ToolSupport toolSupport(ToolRegistry toolRegistry,
+                                   org.springframework.beans.factory.ObjectProvider<
+                                           com.dj.ai.agentchat.tool.mcp.callback.McpToolProvider> mcpToolProvider) {
+        // MCP 子开关关闭/未装配时 getIfAvailable()=null → 纯 DB 工具，与迭代 G 逐字节一致（AC-3）
+        return new DefaultToolSupport(toolRegistry, mcpToolProvider.getIfAvailable());
     }
 
     /**

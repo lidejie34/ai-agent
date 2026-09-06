@@ -89,6 +89,15 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "请求参数类型错误: " + e.getName());
     }
 
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> handleMethodNotSupported(
+            org.springframework.web.HttpRequestMethodNotSupportedException e) {
+        // 只读接口（如 MCP server 视图）收到写方法 → 405（不被兜底 Exception 吞为 500，AC-28）
+        log.debug("请求方法不支持: {}", e.getMessage());
+        return build(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED",
+                "请求方法不支持: " + e.getMethod());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception e) {
         log.error("未处理异常", e);

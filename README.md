@@ -245,6 +245,85 @@ curl -s 'http://localhost:8080/api/admin/tool-call-logs?page=0&size=20&status=fa
 端到端冒烟清单（帧序、CRUD、503/401/400 矩阵、SCRIPT 启停、脱敏、无状态工具调用）见
 `reports/db-tool-smoke-checklist.md`（由流水线 step_8 在真实 MySQL + 方舟 Key 环境执行并回填结论）。
 
+### MCP 工具接入（插入迭代4：MCP Client / stdio）
+
+在 DB 工具之外，应用启动时可经 stdio 拉起本机 MCP server（[Model Context Protocol](https://modelcontextprotocol.io/)），
+发现其工具并挂载给模型；MCP 工具与 DB 工具在**同一次** `.tools(...)` 挂载中合并（DB 在前、MCP 在后，
+同名冲突跳过 MCP 并 WARN），完整复用 G 的横切治理：`event:tool` 三态帧、审计落 `agent_tool_call_log`
+（`handler_type='MCP'`）、密钥脱敏、输出截断、超时硬顶 60s、流式重试幂等、全异常捕获转结构化错误。
+模型可见的工具名为 server 命名空间前缀形式：`<server名>_<server工具名>`（小写、非 `[a-z0-9_]` 字符转 `_`，
+超长截断 + 短哈希），例如 `fs_read_file`。
+
+**开关语义**：`app.tools.mcp.enabled=false`（默认 true）时 MCP 全家桶不装配、不拉起任何子进程，
+行为与迭代 G 逐字节一致；单个 server 握手失败/启动即退只把该 server 标记为 UNAVAILABLE（WARN +
+管理端可见 lastError），不阻断应用启动、不影响其他 server；运行期进程崩溃摘除该 server 工具
+（不自动重启，需重启应用恢复）。`server-everything` / `server-filesystem` 两个参考 server
+首跑需联网拉 npm 包；MCP server 二进制/参数**只来自部署配置**（application.yml / 环境变量），
+模型、对话参数、任何 HTTP 接口都不能新增/修改/删除 server——管理端**只有只读接口**。
+
+**配置示例**（`application.yml`；真实 env 密钥只走 `application-local.yml` 或环境变量，不入库）：
+
+```yaml
+app:
+  tools:
+    mcp:
+      enabled: true            # APP_TOOLS_MCP_ENABLED；false = 不拉子进程、纯 DB 工具
+      request-timeout: 20s     # APP_TOOLS_MCP_REQUEST_TIMEOUT；握手/启动发现预算
+      servers:
+        - name: fs             # 须匹配 ^[a-z][a-z0-9-]{1,40}$（工具名前缀、日志/审计标识）
+          # 推荐：node/npx 用绝对路径，避免依赖启动用户的 PATH 解析
+          command: /opt/homebrew/bin/npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/ai-data/mcp-workspace"]
+          env:                # 仅追加配置显式声明的变量（最小化；勿依赖父进程环境中的密钥）
+            DEBUG: "mcp:*"
+        - name: everything
+          command: /opt/homebrew/bin/npx
+          args: ["-y", "@modelcontextprotocol/server-everything"]
+```
+
+**部署红线 / 注意事项**：
+
+- **argv 直传，不经 shell**：command + args 数组原样作为子进程 argv（`ProcessBuilder`），
+  **禁止 `sh -c "..."` / `bash -c` 拼接**（配置校验直接拒绝）。参数中任何内容都不会被 shell 解释。
+- **npx 命令写法**：首选 `command: <npx 绝对路径>` + `args: ["-y", "<包名>", ...]`（`-y` 自动确认安装，
+  避免首次运行卡在交互提示）。个别 Windows/软链环境 npx 行为异常时的等效回退写法：
+  `command: <node 绝对路径>` + `args: ["<npm 全局目录>/lib/node_modules/npm/bin/npx-cli.js", "-y", "<包名>", ...]`。
+  拿绝对路径：`which npx`、`readlink -f "$(which npx)"`。
+- **npx 缓存预热（离线/AC-44）**：首跑 npx 需联网下载包；部署机首次配置后、断网前，先手动执行一次
+  `npx -y @modelcontextprotocol/server-everything --help`（filesystem 同理）把包灌入 npx 缓存，
+  之后离线启动可正常拉起。首跑无网络时该 server 握手超时 → UNAVAILABLE（WARN），应用其余功能不受影响。
+- **filesystem 工作目录红线（AC-29）**：`server-filesystem` **必须**显式传至少一个工作目录参数；
+  未传目录的配置项视为非法、启动跳过。目录必须是**专用数据目录**（如应用数据目录下的 `mcp-workspace/`，
+  仓库根的 `mcp-workspace/` 已 gitignore）——**严禁**配成仓库根、家目录（`$HOME`）、文件系统根 `/`、
+  系统目录；server 以运行应用的同一用户权限运行（不提权），目录即其文件读写边界。
+  目录不存在时应用尝试创建（失败仅 WARN），危险路径仅 WARN 不阻断（部署责任）。
+- **子进程环境继承**：子进程默认继承最小父进程环境（显式补 `PATH`/`HOME` 供 node/npx 运行），
+  `env` 中声明的变量叠加注入。server 若必须使用密钥，只能经配置显式注入，并确认日志/stdout/stderr
+  不会回显；stderr 行会经 SecretRedactor 脱敏后落日志。
+- **关闭与残留**：应用关闭（SIGTERM/容器停止）时对每个 server 发送优雅关闭并回收子进程；
+  运维侧可用 `pgrep -f server-filesystem` 核验无孤儿进程。
+
+**MCP 管理端只读接口**（同样需 `X-Admin-Token`，响应**不含 env**；写方法 405）：
+
+```bash
+TOKEN='你的管理端令牌'
+# server 列表：name/command/args/status(READY|UNAVAILABLE)/工具清单与数量/lastError/connectedAt
+curl -s http://localhost:8080/api/admin/mcp/servers -H "X-Admin-Token: $TOKEN"
+# 审计按处理器类型过滤（BUILTIN/SCRIPT/MCP，非法值 400；不传返回全部）
+curl -s 'http://localhost:8080/api/admin/tool-call-logs?handlerType=MCP&size=20' \
+  -H "X-Admin-Token: $TOKEN"
+```
+
+| 配置项 | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `app.tools.mcp.enabled` | `APP_TOOLS_MCP_ENABLED` | `true` | MCP 子开关；false 时不装配、不拉子进程，纯 DB 工具 |
+| `app.tools.mcp.request-timeout` | `APP_TOOLS_MCP_REQUEST_TIMEOUT` | `20s` | 握手/初始化超时与启动发现预算；单工具调用超时沿用 `app.tools.default-timeout-ms`（硬顶 60s） |
+| `app.tools.mcp.servers` | — | `[]` | server 列表：name/command/args/env；env 仅本地配置注入，不入库、不进任何响应 |
+
+端到端冒烟清单（npx 预热→READY 日志→everything echo→filesystem 目录内外读写→杀进程崩溃 UNAVAILABLE→
+SIGTERM 无孤儿→handlerType=MCP 过滤→401/无 env→无状态 session_id NULL）见
+`reports/mcp-smoke-checklist.md`（由流水线 step_8 在真实 npx 环境执行并回填结论）。
+
 ### 前端（在 `frontend/` 目录执行）
 
 ```bash

@@ -54,6 +54,9 @@ logs/
 tmp/
 temp/
 
+# ========== MCP filesystem server 工作目录（迭代4，AC-29：专用目录不入仓） ==========
+mcp-workspace/
+
 # ========== Optional 如果你后续加Java/Spring后端也兼容 ==========
 # target/
 # *.iml

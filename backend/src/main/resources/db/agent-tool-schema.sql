@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS agent_tool (
 CREATE TABLE IF NOT EXISTS agent_tool_call_log (
   id            BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
   call_id       VARCHAR(160) NOT NULL COMMENT '幂等键：requestId|toolName|sha1(入参JSON)',
-  tool_name     VARCHAR(64)  NOT NULL COMMENT '工具名字符串留存（工具行删除后审计保留，无外键）',
+  -- 迭代4：MCP 工具暴露名 <server>_<tool>（规整后 ≤64）但审计存完整全名，列宽放宽至 128；
+  -- 既有库由 AuditColumnWidthMigration best-effort ALTER（information_schema 查宽 <128 才改）。
+  tool_name     VARCHAR(128) NOT NULL COMMENT '工具名字符串留存（MCP 为带前缀全名；工具行删除后审计保留，无外键）',
   handler_type  VARCHAR(16)  NOT NULL COMMENT '处理器类型快照',
   session_id    VARCHAR(36)  NULL COMMENT '会话 ID；无状态对话为 NULL',
   input_summary VARCHAR(2000) NOT NULL COMMENT '入参 JSON：脱敏 + 截断',

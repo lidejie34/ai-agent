@@ -125,6 +125,34 @@
             <version>2.0.61</version>
         </dependency>
 
+        <!-- 迭代4：MCP Client（stdio 手工装配，路径 B）。
+             mcp-core 0.14.0 + mcp-json-jackson2 0.14.0 均在离线库 ~/tc/tc_resp；
+             版本显式声明（spring-ai BOM 不管理 mcp SDK；不引 spring-ai-starter-mcp-client，
+             不用其自动注册的 SyncMcpToolCallbackProvider——MCP 工具回调全部由本工程
+             McpToolCallback 包装产生，AC-16 结构性保证）。
+             mcp-core 传递 reactor-core 3.7.0（Boot BOM 管理）/jackson/slf4j，均已离线可解析；
+             不引 spring-webflux/reactor-netty/mcp-spring-webflux，保持 Servlet MVC 栈（AC-46）。 -->
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-core</artifactId>
+            <version>0.14.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-json-jackson2</artifactId>
+            <version>0.14.0</version>
+            <!-- 离线库 tc_resp 无 com.networknt:json-schema-validator:1.5.7 及其传递 com.ethlo.time:itu
+                 的 jar（仅 pom）；该 validator 仅用于 structuredContent 输出校验，本迭代只用
+                 TextContent 文本块，故排除并在 StdioMcpClientFactory 装配时显式传入 no-op
+                 JsonSchemaValidator（不触发 ServiceLoader 的 networknt 实现加载）。 -->
+            <exclusions>
+                <exclusion>
+                    <groupId>com.networknt</groupId>
+                    <artifactId>json-schema-validator</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- 工具 -->
         <dependency>
             <groupId>org.projectlombok</groupId>

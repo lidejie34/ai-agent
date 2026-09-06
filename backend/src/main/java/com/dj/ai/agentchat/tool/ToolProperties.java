@@ -1,7 +1,9 @@
 package com.dj.ai.agentchat.tool;
 
+import com.dj.ai.agentchat.tool.mcp.McpProperties;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,6 +38,13 @@ public class ToolProperties {
 
     /** 内置日志分析工具参数。 */
     private Builtin builtin = new Builtin();
+
+    /**
+     * 迭代4：MCP 工具接入参数（{@code app.tools.mcp.*}）。默认 enabled=true、servers 空列表
+     * （零子进程，行为与迭代 G 一致）；MCP 运行时 bean 另受 mcp.enabled 子开关控制。
+     */
+    @NestedConfigurationProperty
+    private McpProperties mcp = new McpProperties();
 
     @Data
     public static class Builtin {

@@ -446,7 +446,7 @@ class ToolAdminServiceTest {
         });
 
         PageResult<ToolCallLogView> result = service.pageLogs(0, 20, "analyze_log", null,
-                "SUCCESS", LocalDateTime.now().minusDays(1), LocalDateTime.now());
+                "SUCCESS", null, LocalDateTime.now().minusDays(1), LocalDateTime.now());
 
         assertThat(result.content()).hasSize(1);
         assertThat(result.total()).isEqualTo(1L);
@@ -464,18 +464,47 @@ class ToolAdminServiceTest {
                 .contains("ORDER BY created_at DESC");
     }
 
+    /** 迭代4 AC-34：handlerType=MCP 过滤追加 handler_type 条件（小写输入归一化）。 */
+    @Test
+    @SuppressWarnings("unchecked")
+    void logs_handlerTypeMcp_addsHandlerTypeFilter() {
+        when(logMapper.selectPage(any(), any())).thenAnswer(inv -> {
+            Page<AgentToolCallLogPO> page = inv.getArgument(0);
+            page.setRecords(List.of());
+            page.setTotal(0L);
+            return page;
+        });
+
+        service.pageLogs(0, 20, null, null, null, "mcp", null, null);
+
+        ArgumentCaptor<QueryWrapper<AgentToolCallLogPO>> wrapperCaptor =
+                ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(logMapper).selectPage(any(), wrapperCaptor.capture());
+        String segment = wrapperCaptor.getValue().getSqlSegment();
+        assertThat(segment).contains("handler_type");
+        assertThat(wrapperCaptor.getValue().getParamNameValuePairs().containsValue("MCP")).isTrue();
+    }
+
+    /** 迭代4 AC-34：白名单外 handlerType（含预留枚举 HTTP）→ 400。 */
+    @Test
+    void logs_illegalHandlerType_400() {
+        assertInvalid(() -> service.pageLogs(0, 20, null, null, null, "HTTP", null, null));
+        assertInvalid(() -> service.pageLogs(0, 20, null, null, null, "RCE", null, null));
+        verify(logMapper, never()).selectPage(any(), any());
+    }
+
     @Test
     void logs_badPaging_400() {
-        assertInvalid(() -> service.pageLogs(-1, 20, null, null, null, null, null));
-        assertInvalid(() -> service.pageLogs(0, 0, null, null, null, null, null));
-        assertInvalid(() -> service.pageLogs(0, 101, null, null, null, null, null));
+        assertInvalid(() -> service.pageLogs(-1, 20, null, null, null, null, null, null));
+        assertInvalid(() -> service.pageLogs(0, 0, null, null, null, null, null, null));
+        assertInvalid(() -> service.pageLogs(0, 101, null, null, null, null, null, null));
         verify(logMapper, never()).selectPage(any(), any());
     }
 
     @Test
     void logs_dbFailure_503() {
         when(logMapper.selectPage(any(), any())).thenThrow(new QueryTimeoutException("boom"));
-        assertThatThrownBy(() -> service.pageLogs(0, 20, null, null, null, null, null))
+        assertThatThrownBy(() -> service.pageLogs(0, 20, null, null, null, null, null, null))
                 .isInstanceOf(ToolsUnavailableException.class);
     }
 

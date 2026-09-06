@@ -171,6 +171,24 @@ app:
       scan-max-bytes-per-file: ${APP_TOOLS_SCAN_MAX_BYTES:52428800}
       scan-max-lines: ${APP_TOOLS_SCAN_MAX_LINES:200000}
 
+    # ---- 插入迭代4：MCP 工具接入（stdio 子进程；默认零 server，行为与迭代 G 一致）----
+    mcp:
+      # MCP 子开关（受 app.tools.enabled 总开关统管）：false 时不装配 MCP 运行时、不起子进程，
+      # DB 工具正常；管理端 /api/admin/mcp/servers 返回空列表。
+      enabled: ${APP_TOOLS_MCP_ENABLED:true}
+      # SDK 握手/协议请求超时；工具调用执行超时复用上面的 default-timeout-ms（硬顶 60s）。
+      request-timeout: ${APP_TOOLS_MCP_REQUEST_TIMEOUT:20s}
+      # MCP server 声明列表（command 建议绝对路径；args 数组直传 argv，不经 shell，禁 sh -c）。
+      # 默认空 = 不起任何子进程。冒烟/部署示例（详见 README「MCP 工具接入」段）：
+      # servers:
+      #   - name: everything
+      #     command: /opt/homebrew/bin/npx
+      #     args: ["-y", "@modelcontextprotocol/server-everything"]
+      #   - name: fs
+      #     command: /opt/homebrew/bin/npx
+      #     args: ["-y", "@modelcontextprotocol/server-filesystem", "mcp-workspace"]
+      servers: []
+
   # ---- 插入迭代 G：管理端鉴权（/api/admin/**）----
   # token 空白=未配置 → 管理端一律 503 ADMIN_NOT_CONFIGURED；仅 env / application-local.yml 注入，不入库。
   admin:

@@ -103,10 +103,11 @@ public class AdminToolController {
             @RequestParam(name = "toolName", required = false) String toolName,
             @RequestParam(name = "sessionId", required = false) String sessionId,
             @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "handlerType", required = false) String handlerType,
             @RequestParam(name = "from", required = false) String from,
             @RequestParam(name = "to", required = false) String to) {
         return service().pageLogs(parsePage(page), parseSize(size), toolName, sessionId, status,
-                parseTime("from", from), parseTime("to", to));
+                handlerType, parseTime("from", from), parseTime("to", to));
     }
 
     // ---- 防御性取服务 + 参数解析 ----

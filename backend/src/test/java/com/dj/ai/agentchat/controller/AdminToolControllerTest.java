@@ -223,7 +223,7 @@ class AdminToolControllerTest {
 
         @Test
         void logs_defaultPaging_200_pageResult() throws Exception {
-            when(service.pageLogs(anyInt(), anyInt(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
+            when(service.pageLogs(anyInt(), anyInt(), any(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
                 Integer page = inv.getArgument(0);
                 Integer size = inv.getArgument(1);
                 return new PageResult<>(List.of(new ToolCallLogView(1L, "req-1|t|a", "t", "BUILTIN",
@@ -234,7 +234,7 @@ class AdminToolControllerTest {
                     .andExpect(status().isOk())
                     .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
 
-            verify(service).pageLogs(eq(0), eq(20), eq(null), eq(null), eq(null), eq(null), eq(null));
+            verify(service).pageLogs(eq(0), eq(20), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
             assertThat(body).contains("\"total\":1").contains("\"page\":0").contains("\"size\":20")
                     .contains("\"toolName\":\"t\"");
         }
@@ -253,18 +253,32 @@ class AdminToolControllerTest {
             mvc.perform(get("/api/admin/tool-call-logs").header(HDR, TOKEN).param("size", "abc"))
                     .andExpect(status().isBadRequest());
             verify(service, org.mockito.Mockito.never())
-                    .pageLogs(anyInt(), anyInt(), any(), any(), any(), any(), any());
+                    .pageLogs(anyInt(), anyInt(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
         void logs_isoTimeAccepted() throws Exception {
-            when(service.pageLogs(anyInt(), anyInt(), any(), any(), any(), any(), any()))
+            when(service.pageLogs(anyInt(), anyInt(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(new PageResult<>(List.of(), 0L, 0, 20));
             mvc.perform(get("/api/admin/tool-call-logs").header(HDR, TOKEN)
                             .param("from", "2026-09-04T10:00:00")
                             .param("to", "2026-09-04 12:00:00")
                             .param("toolName", "analyze_log").param("status", "FAILED"))
                     .andExpect(status().isOk());
+        }
+
+        /** 迭代4 AC-34：handlerType 参数透传（小写 mcp 由 service 归一化，白名单在 service 测）。 */
+        @Test
+        void logs_handlerTypeParam_passedThrough() throws Exception {
+            when(service.pageLogs(anyInt(), anyInt(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(new PageResult<>(List.of(), 0L, 0, 20));
+
+            mvc.perform(get("/api/admin/tool-call-logs").header(HDR, TOKEN)
+                            .param("handlerType", "MCP"))
+                    .andExpect(status().isOk());
+
+            verify(service).pageLogs(eq(0), eq(20), eq(null), eq(null), eq(null),
+                    eq("MCP"), eq(null), eq(null));
         }
 
         @Test

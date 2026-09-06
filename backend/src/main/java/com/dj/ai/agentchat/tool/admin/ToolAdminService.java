@@ -62,6 +62,8 @@ public class ToolAdminService {
     private static final int OUTPUT_MIN = 100;
     private static final int OUTPUT_MAX = 100000;
     private static final int PAGE_SIZE_MAX = 100;
+    /** 审计分页 handlerType 过滤白名单（迭代4 新增 MCP 字面量）。 */
+    private static final List<String> ALLOWED_LOG_HANDLER_TYPES = List.of("BUILTIN", "SCRIPT", "MCP");
 
     private final AgentToolMapper toolMapper;
     private final AgentToolCallLogMapper logMapper;
@@ -214,7 +216,8 @@ public class ToolAdminService {
      * @param to        可选：截止时间（含）
      */
     public PageResult<ToolCallLogView> pageLogs(int page, int size, String toolName, String sessionId,
-                                                String status, LocalDateTime from, LocalDateTime to) {
+                                                String status, String handlerType,
+                                                LocalDateTime from, LocalDateTime to) {
         if (page < 0) {
             throw invalid("分页页码(page)不能为负数");
         }
@@ -230,6 +233,14 @@ public class ToolAdminService {
         }
         if (!isBlank(status)) {
             wrapper.eq("status", status.trim());
+        }
+        if (!isBlank(handlerType)) {
+            // 迭代4：审计 handler_type 白名单 BUILTIN/SCRIPT/MCP（MCP 为字面量，非 HandlerType 枚举）
+            String normalizedHandlerType = handlerType.trim().toUpperCase(java.util.Locale.ROOT);
+            if (!ALLOWED_LOG_HANDLER_TYPES.contains(normalizedHandlerType)) {
+                throw invalid("处理器类型(handlerType)仅支持: " + String.join("/", ALLOWED_LOG_HANDLER_TYPES));
+            }
+            wrapper.eq("handler_type", normalizedHandlerType);
         }
         if (from != null) {
             wrapper.ge("created_at", from);
