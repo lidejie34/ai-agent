@@ -30,15 +30,19 @@ public class AdminMcpService {
     public List<McpServerView> listServers() {
         List<McpServerView> views = new ArrayList<>();
         for (McpServerConnection conn : connectionManager.connections()) {
+            // UNAVAILABLE（启动失败/运行期崩溃）视图工具清单为空（需求 4.2/AC-32）：
+            // 连接内部保留发现快照供诊断，但对管理端只暴露 READY 态工具
             List<McpToolView> tools = new ArrayList<>();
-            for (McpSchema.Tool raw : conn.tools()) {
-                if (raw == null || raw.name() == null) {
-                    continue;
+            if (conn.isReady()) {
+                for (McpSchema.Tool raw : conn.tools()) {
+                    if (raw == null || raw.name() == null) {
+                        continue;
+                    }
+                    tools.add(new McpToolView(
+                            McpToolNames.expose(conn.name(), raw.name()),
+                            raw.name(),
+                            raw.description()));
                 }
-                tools.add(new McpToolView(
-                        McpToolNames.expose(conn.name(), raw.name()),
-                        raw.name(),
-                        raw.description()));
             }
             String command = conn.spec() != null ? conn.spec().getCommand() : null;
             List<String> args = conn.spec() != null && conn.spec().getArgs() != null

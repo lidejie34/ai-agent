@@ -39,8 +39,11 @@ class AdminMcpServiceTest {
                 gateway,
                 List.of(new McpSchema.Tool("Read-File", null, "读取文件", null, null, null, null)),
                 McpServerStatus.READY, null);
+        // 崩溃降级场景：连接内部仍持发现快照，但视图必须按 UNAVAILABLE 清空工具清单（需求 4.2）
         McpServerConnection down = new McpServerConnection("ghost", spec("ghost", "/bin/node"),
-                null, List.of(), McpServerStatus.UNAVAILABLE, "握手失败: 启动即退");
+                null,
+                List.of(new McpSchema.Tool("Echo", null, "回声", null, null, null, null)),
+                McpServerStatus.UNAVAILABLE, "进程退出/传输断裂");
 
         McpServerConnectionManager manager = mock(McpServerConnectionManager.class);
         when(manager.connections()).thenReturn(List.of(ready, down));
@@ -64,7 +67,7 @@ class AdminMcpServiceTest {
         assertThat(downView.toolCount()).isZero();
         assertThat(downView.tools()).isEmpty();
         assertThat(downView.connectedAt()).isNull();
-        assertThat(downView.lastError()).contains("握手失败");
+        assertThat(downView.lastError()).contains("进程退出");
 
         // 视图类型本身无 env 字段（记录组件列表断言，防回潮）
         assertThat(McpServerView.class.getRecordComponents())
