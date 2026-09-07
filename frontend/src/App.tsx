@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Switch, message } from 'antd'
+import { Button, Switch, message } from 'antd'
 import AppLayout from './components/AppLayout'
 import SessionSidebar from './components/SessionSidebar'
 import MessageList from './components/MessageList'
@@ -118,10 +118,22 @@ export default function App() {
         />
       }
       headerExtra={
-        <label className="remember-switch">
-          <Switch checked={chat.remember} onChange={chat.setRemember} data-testid="remember-switch" />
-          <span>记住本次对话</span>
-        </label>
+        <>
+          <label className="remember-switch">
+            <Switch checked={chat.remember} onChange={chat.setRemember} data-testid="remember-switch" />
+            <span>记住本次对话</span>
+          </label>
+          {/* 管理控制台入口：仅写 hash，不 import admin 模块、不发请求（AC-1/50 边界） */}
+          <Button
+            size="small"
+            data-testid="admin-entry-btn"
+            onClick={() => {
+              window.location.hash = '#/admin'
+            }}
+          >
+            管理控制台
+          </Button>
+        </>
       }
     >
       <div className="chat-main">

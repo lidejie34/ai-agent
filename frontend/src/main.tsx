@@ -7,14 +7,14 @@ import 'dayjs/locale/zh-cn'
 // 代码高亮主题（rehype-highlight 输出 hljs class）
 import 'highlight.js/styles/github.css'
 import './index.css'
-import App from './App.tsx'
+import Root from './admin/Root'
 
 dayjs.locale('zh-cn')
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ConfigProvider locale={zhCN}>
-      <App />
+      <Root />
     </ConfigProvider>
   </StrictMode>,
 )

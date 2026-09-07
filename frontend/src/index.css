@@ -412,3 +412,213 @@ body {
   border: 1px solid #d9d9d9;
   padding: 6px 12px;
 }
+
+/* 管理控制台入口按钮与记忆开关间距（迭代 H，T0） */
+.app-header-extra {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ==========================================================================
+   管理控制台样式（迭代 H，T6）。类名均带 admin 或 mcp 前缀，不影响对话页。
+   ========================================================================== */
+
+.admin-console-root {
+  min-height: 100vh;
+  background: #f5f6f8;
+}
+
+.admin-layout {
+  min-height: 100vh;
+}
+
+.admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: #001529;
+}
+
+.admin-title {
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.admin-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-content {
+  padding: 16px 24px 32px;
+}
+
+.admin-tabs {
+  background: #fff;
+  padding: 0 16px;
+  border-radius: 8px;
+}
+
+.admin-page-body {
+  margin-top: 12px;
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+/* 登录 */
+.admin-login-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 100vh;
+  padding: 80px 16px;
+  box-sizing: border-box;
+}
+
+.admin-login-card {
+  width: 420px;
+  max-width: 100%;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+}
+
+.admin-login-error {
+  margin-bottom: 12px;
+}
+
+.admin-suspense {
+  padding: 64px 0;
+  text-align: center;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* 工具栏 */
+.admin-page-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-log-filters {
+  flex: 1 1 auto;
+}
+
+.admin-log-filters .ant-form-item {
+  margin-bottom: 8px;
+}
+
+/* 长文本：一律 <pre> 纯文本，不渲染 markdown/HTML */
+.admin-prewrap {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.admin-mono,
+.admin-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.admin-textblock {
+  width: 100%;
+}
+
+.admin-textblock-copy {
+  margin-bottom: 4px;
+  text-align: right;
+}
+
+.admin-jsonblock {
+  width: 100%;
+}
+
+.admin-json {
+  margin: 0;
+  padding: 8px 10px;
+  background: #f6f8fa;
+  border: 1px solid #eef0f2;
+  border-radius: 6px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.admin-text-empty {
+  color: rgba(0, 0, 0, 0.35);
+}
+
+/* 表格省略单元格（Tooltip 包裹全文） */
+.admin-cell-ellipsis {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+/* MCP 面板 */
+.mcp-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mcp-server-card .mcp-card-title {
+  font-weight: 600;
+}
+
+.mcp-card-badge {
+  margin-left: 8px;
+}
+
+.mcp-args-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-arg-line {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.mcp-tools-collapse {
+  margin-top: 8px;
+}
+
+.mcp-last-error {
+  margin-top: 8px;
+}
+
+.mcp-no-error,
+.mcp-no-tools {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* 审计日志展开行 */
+.admin-log-expand {
+  padding: 8px 12px;
+}
+
+.admin-log-expand-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: rgba(0, 0, 0, 0.65);
+}
