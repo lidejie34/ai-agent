@@ -1,5 +1,7 @@
 package com.dj.ai.agentchat.tool.config;
 
+import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
 import com.dj.ai.agentchat.tool.AdminProperties;
 import com.dj.ai.agentchat.tool.ToolProperties;
 import com.dj.ai.agentchat.tool.admin.AdminAuthInterceptor;
@@ -44,6 +46,14 @@ class ToolRuntimeConfigConditionTest {
         // 常驻 web 层：拦截器/配置 bean 无条件装配
         assertThat(context.getBeansOfType(AdminAuthInterceptor.class)).isNotEmpty();
         assertThat(context.getBeansOfType(ToolAdminWebConfig.class)).isNotEmpty();
+    }
+
+    @Test
+    void mybatisPlusInterceptor_isRegistered_withPagination() {
+        // 迭代 H 冒烟修复：缺分页拦截器时 selectPage 退化为全量且 total=0（审计分页失效）
+        MybatisPlusInterceptor interceptor = context.getBean(MybatisPlusInterceptor.class);
+        assertThat(interceptor.getInterceptors())
+                .anySatisfy(inner -> assertThat(inner).isInstanceOf(PaginationInnerInterceptor.class));
     }
 }
 

@@ -50,6 +50,21 @@ import java.util.concurrent.Executors;
 public class ToolRuntimeConfig {
 
     /**
+     * MyBatis-Plus 分页拦截器（迭代 H 冒烟修复，迭代 G 潜伏缺陷）：未注册时
+     * {@code selectPage} 不拼接 LIMIT/COUNT，退化为全量查询且 {@code total=0}，
+     * 管理端审计分页失效。注册后对容器内全部 MP mapper 生效。
+     */
+    @Bean
+    public com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor mybatisPlusInterceptor() {
+        com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor interceptor =
+                new com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor();
+        interceptor.addInnerInterceptor(
+                new com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor(
+                        com.baomidou.mybatisplus.annotation.DbType.MYSQL));
+        return interceptor;
+    }
+
+    /**
      * 懒建表器：持 DataSource，首次工具路径经 ScriptUtils 执行 classpath agent-tool-schema.sql。
      */
     @Bean
