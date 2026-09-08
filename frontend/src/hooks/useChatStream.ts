@@ -1,6 +1,23 @@
 import { useCallback, useRef, useState } from 'react'
 import { streamChat } from '../api/sse'
-import type { ApiError, ChatMessage, ChatRole, ChatStatus, NetworkError, SessionMessageView, ToolCallInfo } from '../types'
+import type { ApiError, ChatMessage, ChatRole, ChatStatus, NetworkError, PlanTaskInfo, PlanTaskStatus, SessionMessageView, ToolCallInfo } from '../types'
+
+/** 规划任务状态秩：只升级不降级（防御帧乱序，迭代5）。pending<running<终态三态同级。 */
+const PLAN_STATUS_RANK: Record<PlanTaskStatus, number> = {
+  pending: 0,
+  running: 1,
+  succeeded: 2,
+  failed: 2,
+  skipped: 2,
+}
+
+/** 同 taskId 合并新老视图：秩升级则整体替换；同级合并补充字段（durationMs/error）；降级保留老值。 */
+function mergePlanTask(oldT: PlanTaskInfo | undefined, incoming: PlanTaskInfo): PlanTaskInfo {
+  if (!oldT) return incoming
+  if (PLAN_STATUS_RANK[incoming.status] > PLAN_STATUS_RANK[oldT.status]) return { ...oldT, ...incoming }
+  if (PLAN_STATUS_RANK[incoming.status] === PLAN_STATUS_RANK[oldT.status]) return { ...oldT, ...incoming }
+  return oldT
+}
 
 let idSeq = 0
 function uid(prefix: string): string {
@@ -75,6 +92,47 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     )
   }, [])
 
+  /**
+   * plan 帧全量台账按 taskId upsert 到当前流式助手消息（迭代5，AC-37/AC-40）：
+   * 新 taskId 按台账顺序追加，已存在按状态秩合并（升级不降级）；
+   * 只挂当前助手消息，历史/新会话天然不带 planTasks。
+   */
+  const upsertPlanTasks = useCallback((id: string, tasks: PlanTaskInfo[]) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== id) return m
+        const existing = m.planTasks ?? []
+        const byId = new Map(existing.map((t) => [t.taskId, t]))
+        const order: string[] = existing.map((t) => t.taskId)
+        for (const incoming of tasks) {
+          if (!byId.has(incoming.taskId)) {
+            byId.set(incoming.taskId, incoming)
+            order.push(incoming.taskId)
+          } else {
+            byId.set(incoming.taskId, mergePlanTask(byId.get(incoming.taskId), incoming))
+          }
+        }
+        return { ...m, planTasks: order.map((tid) => byId.get(tid)!) }
+      }),
+    )
+  }, [])
+
+  /** task 帧按 taskId 推进单个任务状态（started→running，终态覆盖 durationMs/error）。 */
+  const upsertPlanTask = useCallback((id: string, info: PlanTaskInfo) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== id) return m
+        const existing = m.planTasks ?? []
+        const idx = existing.findIndex((t) => t.taskId === info.taskId)
+        const planTasks =
+          idx >= 0
+            ? existing.map((t, i) => (i === idx ? mergePlanTask(t, info) : t))
+            : [...existing, info]
+        return { ...m, planTasks }
+      }),
+    )
+  }, [])
+
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim()
@@ -109,6 +167,8 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         },
         onChunk: (chunk) => appendChunk(assistantId, chunk),
         onTool: (info) => upsertToolCall(assistantId, info),
+        onPlan: (_round, tasks) => upsertPlanTasks(assistantId, tasks),
+        onTask: (info) => upsertPlanTask(assistantId, info),
         onDone: () => {
           patchAssistant(assistantId, { status: 'done' })
           controllerRef.current = null
@@ -129,7 +189,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         },
       })
     },
-    [appendChunk, patchAssistant, upsertToolCall, options],
+    [appendChunk, patchAssistant, upsertToolCall, upsertPlanTasks, upsertPlanTask, options],
   )
 
   const stop = useCallback(() => {

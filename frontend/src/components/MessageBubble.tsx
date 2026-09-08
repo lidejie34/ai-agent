@@ -1,5 +1,6 @@
 import { Tag } from 'antd'
 import MarkdownView from './MarkdownView'
+import PlanTaskBlocks from './PlanTaskBlocks'
 import ToolCallBlocks from './ToolCallBlocks'
 import { errorCodeToText } from '../utils/errors'
 import type { ChatMessage } from '../types'
@@ -19,6 +20,10 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
           <div className="bubble-text">{message.content}</div>
         ) : (
           <>
+            {/* SDD 规划面板：仅当前流式助手消息持有，位于工具折叠块上方（迭代5，AC-37/39） */}
+            {message.planTasks && message.planTasks.length > 0 && (
+              <PlanTaskBlocks planTasks={message.planTasks} />
+            )}
             {/* 工具调用折叠块：仅助手消息、正文 Markdown 上方（历史消息无 toolCalls，AC-68） */}
             {message.toolCalls && message.toolCalls.length > 0 && (
               <ToolCallBlocks toolCalls={message.toolCalls} />

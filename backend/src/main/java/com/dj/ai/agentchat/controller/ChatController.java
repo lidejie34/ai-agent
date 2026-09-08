@@ -6,6 +6,9 @@ import com.dj.ai.agentchat.dto.ChatResponse;
 import com.dj.ai.agentchat.dto.SessionEvent;
 import com.dj.ai.agentchat.dto.StreamChunk;
 import com.dj.ai.agentchat.exception.GlobalExceptionHandler;
+import com.dj.ai.agentchat.orchestration.OrchEventBridge;
+import com.dj.ai.agentchat.orchestration.frame.PlanFrame;
+import com.dj.ai.agentchat.orchestration.frame.TaskFrame;
 import com.dj.ai.agentchat.service.ChatService;
 import com.dj.ai.agentchat.service.ChatStreamResult;
 import com.dj.ai.agentchat.sse.ScheduledHeartbeat;
@@ -137,6 +140,28 @@ public class ChatController {
             });
         }
 
+        // 编排过程帧桥接（迭代5）：编排线程 publish 的 plan/task 帧在此转 event:plan/event:task；
+        // 帧到达同样重置心跳。普通路径 orchBridge=null（不产生新帧，AC-2）。
+        // 五条终止路径与工具桥一同 detach——abort/结束后迟到的编排帧丢弃（AC-34）
+        OrchEventBridge orchBridge = result.orchBridge();
+        if (orchBridge != null) {
+            orchBridge.setSink(frame -> {
+                SseEmitter.SseEventBuilder event;
+                if (frame instanceof PlanFrame planFrame) {
+                    log.debug("SSE推送计划帧: round={}, tasks={}", planFrame.round(), planFrame.tasks().size());
+                    event = SseEmitter.event().name("plan").data(planFrame, MediaType.APPLICATION_JSON);
+                } else if (frame instanceof TaskFrame taskFrame) {
+                    log.debug("SSE推送任务帧: task={}, status={}", taskFrame.taskId(), taskFrame.status());
+                    event = SseEmitter.event().name("task").data(taskFrame, MediaType.APPLICATION_JSON);
+                } else {
+                    return;
+                }
+                if (sendEvent(emitter, event)) {
+                    resetHeartbeat(heartbeat);
+                }
+            });
+        }
+
         Flux<String> flux = result.chunks();
         Disposable subscription = flux.subscribe(
                 chunk -> {
@@ -151,14 +176,14 @@ public class ChatController {
                 error -> {
                     log.warn("SSE流式对话异常: 已推送片段数={}, 耗时={}ms, 原因={}",
                             chunkCount.get(), System.currentTimeMillis() - start, error.getMessage());
-                    detachBridge(toolBridge);
+                    detachAll(toolBridge, orchBridge);
                     sendErrorAndComplete(emitter, error);
                     cancelHeartbeat(heartbeat);
                 },
                 () -> {
                     log.info("SSE流式对话完成: 推送片段数={}, 耗时={}ms",
                             chunkCount.get(), System.currentTimeMillis() - start);
-                    detachBridge(toolBridge);
+                    detachAll(toolBridge, orchBridge);
                     sendEvent(emitter, SseEmitter.event().name("done").data("[DONE]"));
                     emitter.complete();
                     cancelHeartbeat(heartbeat);
@@ -168,19 +193,19 @@ public class ChatController {
         emitter.onTimeout(() -> {
             log.warn("SSE流式对话超时: 已推送片段数={}, 耗时={}ms",
                     chunkCount.get(), System.currentTimeMillis() - start);
-            detachBridge(toolBridge);
+            detachAll(toolBridge, orchBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
             emitter.complete();
         });
         emitter.onError(t -> {
             log.debug("SSE连接异常（客户端可能已断开）: {}", t.getMessage());
-            detachBridge(toolBridge);
+            detachAll(toolBridge, orchBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
         });
         emitter.onCompletion(() -> {
-            detachBridge(toolBridge);
+            detachAll(toolBridge, orchBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
         });
@@ -188,9 +213,17 @@ public class ChatController {
         return emitter;
     }
 
-    private static void detachBridge(@Nullable ToolCallBridge toolBridge) {
+    /**
+     * 五条终止路径（done/error/onTimeout/onCompletion/onError）统一摘除工具桥与编排桥
+     * （迭代5）：终止后迟到的工具事件与 plan/task 帧均丢弃（AC-34/AC-69）。
+     */
+    private static void detachAll(@Nullable ToolCallBridge toolBridge,
+                                  @Nullable OrchEventBridge orchBridge) {
         if (toolBridge != null) {
             toolBridge.detach();
+        }
+        if (orchBridge != null) {
+            orchBridge.detach();
         }
     }
 

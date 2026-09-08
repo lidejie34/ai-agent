@@ -9,9 +9,15 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
   BUILTIN / 白名单脚本 SCRIPT 两类处理器），对话中模型自动调用，调用过程以 `event:tool`
   SSE 帧实时回传前端；另有 **管理端 REST**（`/api/admin/**`，X-Admin-Token 鉴权）做工具
   CRUD、指南热更新与调用审计日志查询。
+- 迭代 5 起内置 **SDD 子智能体编排**（`app.sdd.enabled=true` 开启，默认关闭）：Planner
+  先路由（直答 / 拆解计划），Executor 顺序执行子任务（共享工具挂载），Planner 再规划循环
+  直至汇总收尾；过程以 `event:plan` / `event:task` SSE 帧实时回传，审计落
+  `agent_orchestration_run` 表；关闭时编排 bean 全家桶不装配，行为与迭代 4 逐字节一致。
 - `frontend/`：Vite + React 18 + TypeScript + antd 5 对话页，fetch 手写 SSE 分帧消费流式接口，
   会话侧边栏（列表/切换/重命名/删除）、Markdown 渲染、停止生成、草稿与刷新恢复；
-  工具调用在助手气泡内显示为「🔧 调用工具 xxx」折叠块（进行中转圈/成功耗时/失败错误摘要）。
+  工具调用在助手气泡内显示为「🔧 调用工具 xxx」折叠块（进行中转圈/成功耗时/失败错误摘要），
+  SDD 编排开启时气泡内工具块上方显示「📋 规划与执行」竖向 Steps 面板（待办/执行中/成功耗时/
+  失败错误/已跳过，按 taskId 原地更新）。
 
 **前后端同源部署**：后端不启用 CORS，开发期由 Vite proxy、生产期由 nginx 反向代理把 `/api`
 转发到后端，浏览器只访问同源地址（业务代码中只有相对路径 `/api/...`，无硬编码后端主机）。
@@ -120,7 +126,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 java -version    # 期望 openjdk version "17.0.x"（Temurin）
 mvn -v           # 期望 Java version: 17.0.x；若显示 1.8 说明切换失败
 
-# 2) 离线全量测试（无需 Key、无需外网、无需数据库，应全绿；406 测试）
+# 2) 离线全量测试（无需 Key、无需外网、无需数据库，应全绿；594 测试）
 mvn -o test
 
 # 3) 不启动 MySQL、不填 Key，直接启动（验证缺库缺 Key 可启动；无 Key 调对话返回 503 ARK_NOT_CONFIGURED）
@@ -324,6 +330,88 @@ curl -s 'http://localhost:8080/api/admin/tool-call-logs?handlerType=MCP&size=20'
 SIGTERM 无孤儿→handlerType=MCP 过滤→401/无 env→无状态 session_id NULL）见
 `reports/mcp-smoke-checklist.md`（由流水线 step_8 在真实 npx 环境执行并回填结论）。
 
+### SDD 子智能体编排（迭代5：Planner/Executor 顺序循环）
+
+**默认关闭**（`app.sdd.enabled=false`）：关闭时编排全家桶（OrchestrationService、Planner/Executor
+Clients、ModelInvoker、审计 Mapper、两个 daemon 线程池）一律不装配，对话零额外模型调用、
+SSE 零 `plan`/`task` 帧，行为与迭代 4 逐字节一致。开启后，每轮对话由编排状态机驱动：
+
+1. **路由（Planner 同步调用）**：Planner 读用户消息 + 历史，输出约定 JSON——`direct`（普通问答，
+   直答文本按 24 codePoint 切片回流，与普通流式帧序列一致）或 `plan`（任务清单，最多 8 个）。
+   路由输出两次均无法解析 → 审计 FAILED 并**降级为迭代4 普通直答**（不把解析错误抛给用户）；
+   路由模型调用异常 → 同样降级。
+2. **执行（Executor 同步调用，严格顺序）**：逐任务发 `event:task`（started）→ Executor  fresh
+   `chatClient.prompt()` 单次调用（共享同一组工具挂载，工具事件帧照常）→ 结果契约
+   `{"ok":true,"result"}` / `{"ok":false,"error"}`（非 JSON 整段视为 result），经脱敏 +
+   截断（默认 2000 字符，附 `…[观察结果已截断]`）后作为观察回灌 Planner；发 `event:task`
+   （succeeded 带 durationMs / failed 带 error 摘要）。单任务超时/异常都收敛为失败观察，
+   **不中断整轮**。
+3. **再规划（Planner 同步调用）**：每轮执行后 Planner 输出 `next`（追加任务，被取代的旧任务
+   标记 skipped 且不执行）或 `final`（进入汇总）。再规划两次无法解析 → 强制收尾汇总。
+4. **汇总（Synth 单次流式）**：Planner 角色以流式输出最终答复（复用普通 `event:message` 帧序列），
+   订阅一次、不重放；汇总失败/预算不足以汇总 → `event:error`。
+
+**硬顶与熔断**：轮次 ≤ 6（含路由）、累计子任务 ≤ 8（含跳过）、连续失败 ≤ 2（成功/跳过重置）、
+循环检测（规范化标题重复且上次再规划任务失败，累计 2 次 → 强制收尾）；总墙钟预算 SSE 110s /
+同步 55s（短于容器 120s/60s 超时），每次新模型调用前检查剩余预算，单子任务超时取
+`task-timeout` 与剩余预算的较小值；预算耗尽且不足 5s 汇总时间 → 明确错误提示重试。
+
+**请求级三态开关**：请求体可选 `"sdd": true|false`（`ChatRequest.sdd`，缺省 null）——
+总开关关闭时 `sdd:true` 仅 WARN 忽略、仍走普通路径；总开关开启时 `sdd:false` 强制普通路径，
+null/true 进入编排。前端当前不发送该字段（总开关开启即全量启用），留作灰度/对比开关。
+
+**SSE 帧协议**（仅编排开启且本轮进入 plan 路径时出现；`event:message`/`:keepalive`/`event:done`
+语义不变）：
+
+```
+event:plan
+data:{"round":1,"tasks":[{"taskId":"t1","title":"...","status":"pending"}],"truncated":true}
+
+event:task
+data:{"taskId":"t1","title":"...","status":"started","round":1}
+
+event:task
+data:{"taskId":"t1","title":"...","status":"succeeded","durationMs":3200}
+```
+
+- `event:plan`：每轮（路由 + 每次再规划）发全量台账，`round` 从 1 起；任务数超上限被截断时
+  `truncated:true`；status 五态 `pending/running/succeeded/failed/skipped`，null 字段省略
+  （fastjson2，故 started 帧无 durationMs、succeeded 帧无 round）。
+- `event:task`：单任务状态推进，`started`/`succeeded`/`failed` 三态；迟到帧（done/error 后）
+  一律丢弃，五条终止路径都会 detach 编排桥。
+
+**审计**：`agent_orchestration_run` 表启动期 best-effort 懒建（DB 不可达仅 WARN，不拖垮对话）；
+记录每次 Planner/Executor/Synth 调用的角色、轮次、模型、耗时、状态与错误摘要，审计写入失败
+只记日志、绝不影响编排主流程。
+
+**前端面板**：`event:plan`/`event:task` 由 sseFrames 纯函数解析（非法帧→null 忽略，与工具帧同一
+容错策略），useChatStream 按 taskId upsert 到**当前流式助手消息**（状态只升级不降级，防御帧乱序；
+历史消息不带规划面板），MessageBubble 在工具折叠块上方挂载 antd Steps 竖向面板
+（📋 规划与执行：pending 等待 / running 转圈执行中 / succeeded 绿色 + 耗时 / failed 红色错误摘要 /
+skipped 灰色「已跳过」）。
+
+**配置项**（全部在 `application.yml` 外置，密钥仍只走 env / gitignored 的 local 文件）：
+
+| 配置项 | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `app.sdd.enabled` | `APP_SDD_ENABLED` | `false` | 编排总开关；false 时全家桶不装配、零额外模型调用零新帧，行为=迭代4 |
+| `app.sdd.max-rounds` | `APP_SDD_MAX_ROUNDS` | `6` | Planner 调用轮次硬顶（路由=第 1 轮；理论模型调用上限 1+6+8+1=16） |
+| `app.sdd.max-tasks` | `APP_SDD_MAX_TASKS` | `8` | 累计子任务数硬顶（含执行/重试/跳过）；超限计划截断并标 `truncated` |
+| `app.sdd.max-consecutive-failures` | `APP_SDD_MAX_CONSECUTIVE_FAILURES` | `2` | 连续失败硬顶；成功/跳过重置计数 |
+| `app.sdd.total-budget-sse` | `APP_SDD_TOTAL_BUDGET_SSE` | `110s` | SSE 路径总墙钟预算（须短于 sse-timeout 120s） |
+| `app.sdd.total-budget-sync` | `APP_SDD_TOTAL_BUDGET_SYNC` | `55s` | 同步路径总墙钟预算（须短于 read-timeout 60s） |
+| `app.sdd.task-timeout` | `APP_SDD_TASK_TIMEOUT` | 空（继承 60s） | 单子任务超时；实际取与剩余预算的较小值 |
+| `app.sdd.planner.model` | `APP_SDD_PLANNER_MODEL` | 空（继承主模型） | Planner 角色模型 ID（路由/再规划/汇总共用） |
+| `app.sdd.planner.system-prompt` | `APP_SDD_PLANNER_SYSTEM_PROMPT` | 空（内置常量） | 空白=回退内置默认提示词（角色必有提示词，**非**「不注入」语义） |
+| `app.sdd.planner.temperature` | `APP_SDD_PLANNER_TEMPERATURE` | 空（继承默认） | Planner 采样温度 |
+| `app.sdd.executor.model` | `APP_SDD_EXECUTOR_MODEL` | 空（继承主模型） | Executor 角色模型 ID |
+| `app.sdd.executor.system-prompt` | `APP_SDD_EXECUTOR_SYSTEM_PROMPT` | 空（内置常量） | 同上，空白回退内置 Executor 提示词 |
+| `app.sdd.executor.temperature` | `APP_SDD_EXECUTOR_TEMPERATURE` | 空（继承默认） | Executor 采样温度 |
+| `app.sdd.executor.max-result-chars` | `APP_SDD_EXECUTOR_MAX_RESULT_CHARS` | `2000` | 子任务结果回灌前截断字符数（硬下限 64，附截断标记） |
+
+> 真实方舟环境的端到端冒烟（路由直答/计划多任务/工具挂载/再规划跳过/各熔断/汇总/审计行/
+> 前端面板推进）需在线执行；离线单测以 mock ChatClient 覆盖全状态机（后端 99 个编排相关测试）。
+
 ### 前端（在 `frontend/` 目录执行）
 
 ```bash
@@ -331,7 +419,7 @@ cd frontend
 npm install        # 首次安装依赖（版本已在 package.json 锁定主版本）
 
 npm run dev        # 开发服务器（默认 5173），/api 经 Vite proxy 转发到后端
-npm run test       # vitest 全量单测（jsdom，无需后端；95 测试）
+npm run test       # vitest 全量单测（jsdom，无需后端；186 测试）
 npm run build      # tsc 严格类型检查 + 生产构建（dist/）
 npm run preview    # 本地预览生产构建
 ```
@@ -384,7 +472,7 @@ server {
 
 ```bash
 # 后端（cd backend 后，JDK17）
-mvn -o test                       # 离线全量测试（406 测试）
+mvn -o test                       # 离线全量测试（594 测试）
 mvn -o package -DskipTests        # 编译打包（target/dj-agent-chat-0.0.1-SNAPSHOT.jar）
 mvn dependency:resolve            # 解析依赖（Spring AI M7 从 Maven Central 获取）
 
@@ -450,6 +538,22 @@ backend/src/main/java/com/dj/ai/agentchat/
 │   ├── config/                        #   ToolRuntimeConfig（@ConditionalOnProperty 工具运行时）、
 │   │                                  #     ToolAdminWebConfig（常驻：拦截器注册）
 │   └── dto/ToolEventFrame.java        #   event:tool 帧 DTO（fastjson2 序列化，null 字段省略）
+├── orchestration/                     # 迭代5：SDD 子 Agent 编排（@ConditionalOnProperty app.sdd.enabled）
+│   ├── SddProperties.java             #   app.sdd.* 配置绑定（开关/轮次/任务/失败/预算/角色）
+│   ├── SddRuntimeConfig.java          #   条件装配：daemon 池（sdd-orchestrator/sdd-model-call）、
+│   │                                  #     ModelInvoker、Planner/Executor Clients、OrchestrationService
+│   ├── OrchestrationService.java      #   编排状态机：路由→顺序执行→再规划循环→汇总，硬顶/预算/循环检测
+│   ├── OrchEventBridge / OrchInput / OrchSyncOutcome  # 帧桥与编排入参/同步出参
+│   ├── frame/                         #   OrchFrame（sealed：PlanFrame/TaskFrame）+ TaskView，null 字段省略
+│   ├── planner/                       #   PlannerClient（route/replan 同步 + synth 单次流式，
+│   │                                  #     JSON 围栏提取/失败重试一次/降级）、PlannerProtocol、
+│   │                                  #     PlannerContext、RouteDecision/ReplanDecision/TaskSpec、
+│   │                                  #     SddPrompts（内置角色提示词常量）
+│   ├── executor/                      #   ExecutorClient（单任务同步调用、结果契约解析、脱敏截断、
+│   │                                  #     超时/异常收敛为失败观察）、TaskOutcome
+│   ├── support/                       #   ModelInvoker（daemon 池 Future + 超时强杀）、
+│   │                                  #     ObservationText、CapReasons、TaskTimeoutException
+│   └── audit/                         #   OrchestrationAuditService + po/mapper + agent_orchestration_run 懒建表
 └── exception/                         # ChatNotConfiguredException / ModelCallException /
                                        # InvalidChatRequestException / MemoryUnavailableException(503) /
                                        # SessionNotFoundException(404) / ToolNotFoundException(404) /
@@ -457,7 +561,7 @@ backend/src/main/java/com/dj/ai/agentchat/
 backend/src/main/resources/
 ├── application.yml                    # 入库配置（密钥占位、三套存储连接、Hikari 懒启动、
 │                                      #   重试/连接池/心跳/system-prompt、app.chat.memory.*、
-│                                      #   app.tools.*/app.admin.* 全部外置）
+│                                      #   app.tools.*/app.sdd.*/app.admin.* 全部外置）
 ├── db/chat-memory-schema.sql          # chat_session / chat_message 建表脚本（CREATE TABLE IF NOT EXISTS）
 ├── skills/                            # 种子内置工具指南 md（analyze_log_errors / log_error_count）
 └── application-local.yml.example      # 本地凭证模板（复制为 application-local.yml，已被 gitignore）
@@ -470,17 +574,21 @@ frontend/
 └── src/
     ├── api/                           # http.ts（错误体归一）、sse.ts（fetch+reader 手写分帧、30s 看门狗、
     │                                  #   AbortController 双 reason）、sessions.ts（会话 REST）
-    ├── hooks/                         # useChatStream（对话流状态机：三态请求体/乐观消息/停止/错误归一）、
+    ├── hooks/                         # useChatStream（对话流状态机：三态请求体/乐观消息/停止/错误归一；
+    │                                  #   迭代5 plan/task 帧按 taskId upsert、状态秩只升不降）、
     │                                  #   useSessions（会话列表/切换/删除/重命名，404 静默移除）、
     │                                  #   useAutoScroll（贴底阈值 80px/上滑脱离/回到底部）、
     │                                  #   useLocalDraft（草稿按会话作用域持久化）
     ├── components/                    # AppLayout / SessionSidebar / MessageList / MessageBubble /
+    │                                  #   PlanTaskBlocks（迭代5：📋 规划与执行 antd Steps 竖向面板，
+    │                                  #   挂工具块上方；待办/执行中转圈/成功耗时/失败错误/已跳过）/
     │                                  #   ToolCallBlocks（插入迭代 G：🔧 工具调用折叠块，
     │                                  #   进行中转圈/成功耗时/失败展开错误，手动开合覆盖自动策略）/
     │                                  #   MarkdownView（react-markdown+gfm+highlight，禁 rehype-raw、
     │                                  #   代码块复制）/ ChatInput（Enter 发送/Shift+Enter/IME 组词/停止）/
     │                                  #   EmptyState（示例卡片）/ InlineError（Alert + toast）
-    ├── utils/                         # sseFrames（SSE 分帧纯函数，含 event:tool 解析/未知事件忽略）、
+    ├── utils/                         # sseFrames（SSE 分帧纯函数，含 event:tool/event:plan/event:task
+    │                                  #   解析/未知事件忽略）、
     │                                  #   errors（错误码文案）、
     │                                  #   title（前后端同规则截断）、storage（localStorage 安全封装）
     └── types/                         # 前后端契约 TS 类型
@@ -496,7 +604,11 @@ frontend/
   Lettuce 懒连接；不引 JPA/actuator；Postgres 走 `app.storage.postgres` 自定义命名空间不绑定自动配置。
 - **SSE 事件协议**：（新建会话时先发）`event:session`（`data:{"sessionId":"<UUID>"}`）
   → （工具调用时）`event:tool`（`data:{callId,tool,arguments,status,...}`，started 与终态各一帧；
-  仅插入迭代 G 工具启用且本轮发生调用时出现）→ （空闲期）`:keepalive` 注释帧 →
+  仅插入迭代 G 工具启用且本轮发生调用时出现）
+  → （SDD 编排时）`event:plan`（`data:{round,tasks:[{taskId,title,status}],truncated?}`，每轮全量台账）
+  与 `event:task`（`data:{taskId,title,status,round?,durationMs?,error?}`，started/终态各一帧；
+  仅 `app.sdd.enabled=true` 且本轮进入计划路径时出现）
+  → （空闲期）`:keepalive` 注释帧 →
   `event:message`（`data:{"content":"片段"}`，多帧）→ `event:done`（`data:[DONE]`）；
   记忆阶段失败（DB 不可达等）在订阅前同步抛出、
   以 `event:error` 返回且**不会**先发出 session 帧或启动心跳；异常或缺 Key 同样发
@@ -544,6 +656,17 @@ frontend/
   `agent_tool_call_log`；脚本执行受目录白名单/realpath/argv 数组/环境白名单/超时强杀/输出截断多重约束，
   输出与审计中的密钥形态统一脱敏 `***REDACTED***`；工具帧与管理端 JSON 全部走 fastjson2
   （SSE `.data(obj, APPLICATION_JSON)`，null 字段省略故 started 帧无 durationMs/error 键）。
+- **SDD 子智能体编排（迭代5）**：编排代码全部收口在 `orchestration/` 包，`@ConditionalOnProperty
+  (app.sdd.enabled, matchIfMissing=false)` 条件装配 + 独立 `@MapperScan`；开关关闭时容器内无任何
+  编排 bean，ChatService 经 ObjectProvider 取空即走迭代4 路径（已由「bean 缺席」回归测试锁定）。
+  每次模型调用都新建 `chatClient.prompt()` spec（M7 下复用 spec 会静默绕过 Advisor，同一 Flux
+  重订阅直接抛错）；Planner/Executor 同步调用跑在 `sdd-model-call` daemon 池（Future + 超时
+  cancel(true)），编排循环跑在 `sdd-orchestrator` daemon 池，与 Netty/工具池全部隔离；Synth 汇总
+  为唯一流式调用、Flux 仅订阅一次、不做 Reactor 重试。Planner JSON 协议经围栏/平衡括号提取后
+  fastjson2 解析，失败带纠正指令重试一次：路由仍失败→降级迭代4 直答，再规划失败→强制汇总。
+  编排层不注入 ConversationStore（历史以 `List<Message>` 传入，落库复用 ChatService 成对写入）；
+  审计表 `agent_orchestration_run` 懒建、best-effort 写入；编排帧经 OrchEventBridge 推送，
+  流结束后迟到帧一律丢弃，五条 SSE 终止路径都 detach 桥。
 - **fastjson2（迭代3）**：`FastJsonWebConfig` 以 `extendMessageConverters(converters.add(0,...))`
   把 `FastJsonHttpMessageConverter` 置于通用 Jackson 之前，全线 JSON 线网格式由 fastjson2 治理
   （UTF-8、默认省略 null 字段——故无状态响应不回显 sessionId、SSE 无状态流不发 session 帧；

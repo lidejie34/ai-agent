@@ -1,4 +1,4 @@
-import type { ApiError, NetworkError, ToolCallInfo } from '../types'
+import type { ApiError, NetworkError, PlanTaskInfo, ToolCallInfo } from '../types'
 import { drainFrames } from '../utils/sseFrames'
 import { isWatchdogTimeout, networkError, parseErrorResponse, watchdogTimeoutError } from './http'
 
@@ -13,6 +13,10 @@ export interface StreamHandlers {
   onChunk: (content: string) => void
   /** event:tool 工具生命周期帧（插入迭代 G）：按 callId upsert 折叠块 */
   onTool?: (info: ToolCallInfo) => void
+  /** event:plan 计划台账帧（迭代5）：全量任务视图按 taskId upsert 到规划面板 */
+  onPlan?: (round: number, tasks: PlanTaskInfo[], truncated: boolean) => void
+  /** event:task 子任务状态帧（迭代5）：按 taskId 推进 started→终态 */
+  onTask?: (info: PlanTaskInfo) => void
   onDone: () => void
   onError: (error: ApiError | NetworkError) => void
   onAbort: () => void
@@ -101,6 +105,12 @@ export async function streamChat(
             break
           case 'tool':
             handlers.onTool?.(f.info)
+            break
+          case 'plan':
+            handlers.onPlan?.(f.round, f.tasks, f.truncated === true)
+            break
+          case 'task':
+            handlers.onTask?.(f.info)
             break
           case 'done':
             clearTimer()

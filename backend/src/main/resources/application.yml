@@ -189,6 +189,36 @@ app:
       #     args: ["-y", "@modelcontextprotocol/server-filesystem", "mcp-workspace"]
       servers: []
 
+  # ---- 迭代5：SDD 子 Agent 编排（Planner/Executor 顺序循环）----
+  # 总开关默认 false：关闭时编排 bean 全家桶不装配（Mapper 不扫描、Clients/Service 不创建），
+  # 对话零额外模型调用、SSE 零 plan/task 帧，行为与迭代4 逐字节一致（AC-1/AC-2）。
+  # 提示词语义与 app.chat.system-prompt 不同：sdd 角色提示词空白=回退内置默认常量（角色必有提示词）。
+  sdd:
+    enabled: ${APP_SDD_ENABLED:false}
+    # Planner 调用轮次硬顶（路由=第 1 轮；理论模型调用上限=1+max-rounds+max-tasks+1=16）
+    max-rounds: ${APP_SDD_MAX_ROUNDS:6}
+    # 累计子任务数硬顶（含重试/跳过）
+    max-tasks: ${APP_SDD_MAX_TASKS:8}
+    # 连续失败硬顶（成功/跳过重置）
+    max-consecutive-failures: ${APP_SDD_MAX_CONSECUTIVE_FAILURES:2}
+    # 总墙钟预算：必须短于容器超时（SSE sse-timeout-ms=120s / 同步 read-timeout=60s）
+    total-budget-sse: ${APP_SDD_TOTAL_BUDGET_SSE:110s}
+    total-budget-sync: ${APP_SDD_TOTAL_BUDGET_SYNC:55s}
+    # 单子任务超时；空白=继承模型 HTTP 读超时（60s），受总预算剩余时间兜底
+    task-timeout: ${APP_SDD_TASK_TIMEOUT:}
+    planner:
+      # 空白=继承 spring.ai.openai.chat.options.model
+      model: ${APP_SDD_PLANNER_MODEL:}
+      # 空白=回退内置默认 Planner 提示词常量（非「不注入」语义）
+      system-prompt: ${APP_SDD_PLANNER_SYSTEM_PROMPT:}
+      temperature: ${APP_SDD_PLANNER_TEMPERATURE:}
+    executor:
+      model: ${APP_SDD_EXECUTOR_MODEL:}
+      system-prompt: ${APP_SDD_EXECUTOR_SYSTEM_PROMPT:}
+      temperature: ${APP_SDD_EXECUTOR_TEMPERATURE:}
+      # 子任务结果回灌 Planner 前的截断字符数（附截断标记）
+      max-result-chars: ${APP_SDD_EXECUTOR_MAX_RESULT_CHARS:2000}
+
   # ---- 插入迭代 G：管理端鉴权（/api/admin/**）----
   # token 空白=未配置 → 管理端一律 503 ADMIN_NOT_CONFIGURED；仅 env / application-local.yml 注入，不入库。
   admin:

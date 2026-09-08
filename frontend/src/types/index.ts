@@ -26,6 +26,28 @@ export interface ToolCallInfo {
   error?: string
 }
 
+/**
+ * 规划子任务状态（迭代5，SDD 编排）。
+ * 帧上 started 为执行瞬间事件，界面台账状态为 running；终态 succeeded/failed/skipped。
+ */
+export type PlanTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
+
+/**
+ * 规划面板中的一个子任务（迭代5，event:plan/event:task 帧）。
+ * taskId 为幂等键：plan 帧全量台账按 taskId upsert，task 帧按 taskId 推进状态。
+ */
+export interface PlanTaskInfo {
+  taskId: string
+  title: string
+  status: PlanTaskStatus
+  /** task started 帧携带（所属 Planner 轮次） */
+  round?: number
+  /** task succeeded 帧携带（执行耗时毫秒） */
+  durationMs?: number
+  /** task failed 帧携带（脱敏后失败摘要） */
+  error?: string
+}
+
 /** 界面消息；流式助手消息 content 逐帧累积。 */
 export interface ChatMessage {
   id: string
@@ -37,6 +59,8 @@ export interface ChatMessage {
   error?: ApiError | NetworkError
   /** 仅当轮流式助手消息持有（工具调用折叠块）；历史消息无此字段（AC-68） */
   toolCalls?: ToolCallInfo[]
+  /** 仅当轮流式助手消息持有（SDD 规划与执行面板）；历史消息无此字段（迭代5，AC-41） */
+  planTasks?: PlanTaskInfo[]
 }
 
 export type MessageStatus = 'done' | 'streaming' | 'stopped' | 'error'
@@ -48,6 +72,8 @@ export type SseFrame =
   | { kind: 'done' }
   | { kind: 'error'; error: ApiError }
   | { kind: 'tool'; info: ToolCallInfo } // event:tool 工具生命周期帧（插入迭代 G）
+  | { kind: 'plan'; round: number; tasks: PlanTaskInfo[]; truncated?: boolean } // event:plan 计划台账帧（迭代5）
+  | { kind: 'task'; info: PlanTaskInfo } // event:task 子任务状态帧（迭代5）
   | { kind: 'comment' } // :keepalive 等，仅重置看门狗，不产生界面消息
 
 /** 会话列表项；title/preview 可能为 null（fastjson2 省略键，按可选兜底）。 */

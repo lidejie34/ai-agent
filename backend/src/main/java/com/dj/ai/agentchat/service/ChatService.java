@@ -9,6 +9,10 @@ import com.dj.ai.agentchat.exception.MemoryPersistException;
 import com.dj.ai.agentchat.exception.MemoryUnavailableException;
 import com.dj.ai.agentchat.exception.ModelCallException;
 import com.dj.ai.agentchat.memory.ConversationStore;
+import com.dj.ai.agentchat.orchestration.OrchEventBridge;
+import com.dj.ai.agentchat.orchestration.OrchInput;
+import com.dj.ai.agentchat.orchestration.OrchSyncOutcome;
+import com.dj.ai.agentchat.orchestration.OrchestrationService;
 import com.dj.ai.agentchat.tool.support.ToolMount;
 import com.dj.ai.agentchat.tool.support.ToolSupport;
 import lombok.extern.slf4j.Slf4j;
@@ -84,6 +88,11 @@ public class ChatService {
      * 与迭代 F 逐字节等价，AC-63）。
      */
     private final ObjectProvider<ToolSupport> toolSupportProvider;
+    /**
+     * SDD 编排服务（迭代5；app.sdd.enabled=false 时无 bean → null → 零触达，
+     * 对话路径与迭代4 逐字节一致，AC-1）。
+     */
+    private final ObjectProvider<OrchestrationService> orchestrationProvider;
 
     @Autowired
     public ChatService(ChatClient chatClient,
@@ -95,7 +104,8 @@ public class ChatService {
                        ObjectProvider<ConversationStore> conversationStoreProvider,
                        @Value("${app.chat.memory.max-history:20}") int memoryMaxHistory,
                        @Value("${app.chat.memory.enabled:true}") boolean memoryEnabled,
-                       ObjectProvider<ToolSupport> toolSupportProvider) {
+                       ObjectProvider<ToolSupport> toolSupportProvider,
+                       ObjectProvider<OrchestrationService> orchestrationProvider) {
         this.chatClient = chatClient;
         this.apiKey = apiKey;
         this.configuredModel = configuredModel;
@@ -106,15 +116,35 @@ public class ChatService {
         this.memoryMaxHistory = memoryMaxHistory;
         this.memoryEnabled = memoryEnabled;
         this.toolSupportProvider = toolSupportProvider;
+        this.orchestrationProvider = orchestrationProvider;
+    }
+
+    /**
+     * 迭代 G 测试便捷构造（10 参，无编排）：委托全参构造，编排 ObjectProvider 传 null
+     * （app.sdd.enabled=false 语义；既有工具挂载测试零改动，AC-1）。
+     */
+    public ChatService(ChatClient chatClient,
+                       String apiKey,
+                       String configuredModel,
+                       int streamRetryMaxAttempts,
+                       Duration streamRetryMinBackoff,
+                       Duration streamRetryMaxBackoff,
+                       ObjectProvider<ConversationStore> conversationStoreProvider,
+                       int memoryMaxHistory,
+                       boolean memoryEnabled,
+                       ObjectProvider<ToolSupport> toolSupportProvider) {
+        this(chatClient, apiKey, configuredModel, streamRetryMaxAttempts,
+                streamRetryMinBackoff, streamRetryMaxBackoff, conversationStoreProvider,
+                memoryMaxHistory, memoryEnabled, toolSupportProvider, null);
     }
 
     /**
      * 测试/便捷构造（与迭代 1 签名兼容）：流式重试退避取毫秒级，离线测试快速确定、不真实等待；
-     * 不带记忆存储（无状态行为；会话路径按「记忆未启用」400）、不带工具挂载。
+     * 不带记忆存储（无状态行为；会话路径按「记忆未启用」400）、不带工具挂载、不带编排。
      */
     public ChatService(ChatClient chatClient, String apiKey, String configuredModel) {
         this(chatClient, apiKey, configuredModel, 3,
-                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true, null);
+                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true, null, null);
     }
 
     /**
@@ -124,7 +154,7 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, true, null);
+                new FixedObjectProvider<>(store), memoryMaxHistory, true, null, null);
     }
 
     /**
@@ -134,7 +164,25 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory, boolean memoryEnabled) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled, null);
+                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled, null, null);
+    }
+
+    /**
+     * SDD 编排开关收口（迭代5，AC-1/AC-3/AC-5/AC-6）：编排 bean 缺席（总开关关闭）时
+     * 一律走迭代4 普通路径——请求显式 {@code sdd:true} 仅 warn 忽略不报错；
+     * bean 在场（总开关开启）时，仅请求显式 {@code sdd:false} 强制普通路径，
+     * 其余（null/true）进入编排。
+     */
+    boolean orchestrationEnabled(ChatRequest request) {
+        OrchestrationService orchestration =
+                orchestrationProvider == null ? null : orchestrationProvider.getIfAvailable();
+        if (orchestration == null) {
+            if (Boolean.TRUE.equals(request.sdd())) {
+                log.warn("app.sdd.enabled=false，请求 sdd:true 已忽略，按普通对话处理（AC-3）");
+            }
+            return false;
+        }
+        return !Boolean.FALSE.equals(request.sdd());
     }
 
     /**
@@ -146,23 +194,37 @@ public class ChatService {
         MemoryContext memory = prepareMemory(request);
         List<Message> messages = assembleMessages(request, memory);
         ToolMount toolMount = mountTools(memory.sessionId());
-        log.debug("同步调用模型: 消息总数={}, 配置model={}, sessionId={}, 工具数={}",
+        log.debug("同步调用模型: 消息总数={}, 配置model={}, sessionId={}, 工具数={}, 编排={}",
                 messages.size(), configuredModel, memory.sessionId(),
-                toolMount == null ? 0 : toolMount.callbacks().size());
-        org.springframework.ai.chat.model.ChatResponse aiResponse;
-        try {
-            ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
-            applyTools(spec, toolMount);
-            aiResponse = spec.call().chatResponse();
-        } catch (InvalidChatRequestException | ChatNotConfiguredException e) {
-            throw e;
-        } catch (RuntimeException e) {
-            log.warn("同步模型调用异常: sessionId={}, {}", memory.sessionId(), e.getMessage());
-            throw new ModelCallException(MODEL_FAILED_MESSAGE, e);
+                toolMount == null ? 0 : toolMount.callbacks().size(),
+                orchestrationEnabled(request));
+        String reply;
+        String model;
+        if (orchestrationEnabled(request)) {
+            // 迭代5 SDD 编排同步路径：状态机在 sdd-orchestrator 池上跑 Planner/Executor 同步循环，
+            // 本线程以总预算+5s 安全网阻塞等待；路由失败经 degradeCall 回到迭代4 同步调用
+            OrchestrationService orchestration = orchestrationProvider.getIfAvailable();
+            OrchInput orchInput = buildOrchInput(request, memory, toolMount, false,
+                    () -> extractReply(callNormalSync(messages, toolMount)),
+                    null);
+            OrchSyncOutcome outcome;
+            try {
+                outcome = orchestration.syncTurn(orchInput);
+            } catch (InvalidChatRequestException | ChatNotConfiguredException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                log.warn("同步编排调用异常: sessionId={}, {}", memory.sessionId(), e.getMessage());
+                throw (e instanceof ModelCallException) ? e : new ModelCallException(MODEL_FAILED_MESSAGE, e);
+            }
+            reply = outcome.reply();
+            model = StringUtils.hasText(outcome.model()) ? outcome.model()
+                    : (configuredModel == null ? "" : configuredModel);
+        } else {
+            org.springframework.ai.chat.model.ChatResponse aiResponse = callNormalSync(messages, toolMount);
+            reply = extractReply(aiResponse);
+            model = resolveModel(aiResponse);
         }
-        String reply = extractReply(aiResponse);
-        String model = resolveModel(aiResponse);
-        // 模型成功后成对落库（失败 → 500，reply 不返回）；模型异常不落库
+        // 模型成功后成对落库（失败 → 500，reply 不返回）；模型异常不落库（编排/普通路径一致）
         if (memory.stateful()) {
             persistTurn(memory, request.message(), reply);
         }
@@ -199,19 +261,84 @@ public class ChatService {
         //    抛 "No AroundAdvisor available to execute"，故整个 ChatClient 流式装配必须包在
         //    Flux.defer 中：每次（重）订阅都重建 Advisor 链并重新调用模型（重试才真正生效）。
         StringBuilder aggregated = new StringBuilder();
-        Flux<String> deferred = Flux.defer(() -> {
-            ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
-            applyTools(spec, toolMount);
-            return spec.stream().content();
-        });
-        Flux<String> chunks = withFirstChunkRetry(deferred)
+        boolean orchEnabled = orchestrationEnabled(request);
+        OrchEventBridge orchBridge = null;
+        Flux<String> source;
+        if (orchEnabled) {
+            // 迭代5 SDD 编排流式路径：状态机在 sdd-orchestrator 池上运行（Flux.create+subscribeOn），
+            // plan/task 帧经 orchBridge 旁路；路由失败的降级流复用迭代4 管线（defer+首片段重试）。
+            // 编排 Flux 只订阅一次、不挂 retryWhen（M7 实证：同 Flux 重订阅抛 No AroundAdvisor）
+            orchBridge = new OrchEventBridge();
+            OrchestrationService orchestration = orchestrationProvider.getIfAvailable();
+            OrchInput orchInput = buildOrchInput(request, memory, toolMount, true,
+                    null, () -> buildNormalStreamFlux(messages, toolMount));
+            source = orchestration.streamTurn(orchInput, orchBridge);
+        } else {
+            source = buildNormalStreamFlux(messages, toolMount);
+        }
+        // 尾部管线与迭代4 同构（普通/编排/降级三流复用）：onErrorMap 归一 → 聚合 →
+        // publishOn(boundedElastic) → doOnComplete 成对落库；落库异常吞掉绝不转 error
+        Flux<String> chunks = source
                 .onErrorMap(RuntimeException.class,
                         e -> (e instanceof ModelCallException) ? e : new ModelCallException(STREAM_FAILED_MESSAGE, e))
                 .doOnNext(aggregated::append)
                 .publishOn(reactor.core.scheduler.Schedulers.boundedElastic())
                 .doOnComplete(() -> persistStreamTurn(memory, request.message(), aggregated));
         return new ChatStreamResult(memory.stateful() ? memory.sessionId() : null, chunks,
-                toolMount == null ? null : toolMount.bridge());
+                toolMount == null ? null : toolMount.bridge(), orchBridge);
+    }
+
+    /**
+     * 迭代4 普通流式管线（Flux.defer 每次订阅新建 spec + 首片段前有限重试）；
+     * 普通路径与编排降级路径共用，保证降级形态与开关关闭逐字节一致（AC-10）。
+     */
+    private Flux<String> buildNormalStreamFlux(List<Message> messages, ToolMount toolMount) {
+        Flux<String> deferred = Flux.defer(() -> {
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
+            applyTools(spec, toolMount);
+            return spec.stream().content();
+        });
+        return withFirstChunkRetry(deferred);
+    }
+
+    /** 迭代4 普通同步模型调用（含异常归一）；普通路径与编排同步降级共用。 */
+    private org.springframework.ai.chat.model.ChatResponse callNormalSync(List<Message> messages,
+                                                                          ToolMount toolMount) {
+        try {
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
+            applyTools(spec, toolMount);
+            return spec.call().chatResponse();
+        } catch (InvalidChatRequestException | ChatNotConfiguredException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            log.warn("同步模型调用异常: {}", e.getMessage());
+            throw new ModelCallException(MODEL_FAILED_MESSAGE, e);
+        }
+    }
+
+    /** 装配编排输入：runId 复用共享 mount 的 requestId（工具 run_id 同源），无 mount 时生成 UUID。 */
+    private OrchInput buildOrchInput(ChatRequest request, ChatService.MemoryContext memory,
+                                     ToolMount toolMount, boolean streaming,
+                                     java.util.function.Supplier<String> degradeCall,
+                                     java.util.function.Supplier<Flux<String>> degradeStream) {
+        String runId;
+        if (toolMount != null && toolMount.toolContext() != null
+                && toolMount.toolContext().get("requestId") != null) {
+            runId = String.valueOf(toolMount.toolContext().get("requestId"));
+        } else {
+            runId = UUID.randomUUID().toString();
+        }
+        OrchestrationService orchestration = orchestrationProvider.getIfAvailable();
+        // history 仅传主会话历史前缀（不含本轮 user——Planner/Executor 各自以 userText 组装用户消息，
+        // 避免重复；降级 supplier 仍用完整 messages）
+        return new OrchInput(runId, request.message(), memory.promptPrefix(), memory.sessionId(),
+                toolMount, orchestration.totalBudget(streaming), streaming,
+                degradeStream != null ? degradeStream : () -> {
+                    throw new UnsupportedOperationException("流式降级在同步路径不可用");
+                },
+                degradeCall != null ? degradeCall : () -> {
+                    throw new UnsupportedOperationException("同步降级在流式路径不可用");
+                });
     }
 
     /**
