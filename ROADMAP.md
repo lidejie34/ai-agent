@@ -15,7 +15,7 @@
    ↓
 迭代4 ✅ MCP 工具接入：MCP Client stdio（模型长出"手"，接入 MCP 生态）
    ↓
-迭代5    SDD 子 Agent 编排：任务拆解 → 多 Agent 协作
+迭代5 ✅ SDD 子 Agent 编排：Planner/Executor 顺序循环 + 再规划（任务拆解 → 多 Agent 协作）
    ↓
 按需穿插：可观测性 / Redis 缓存 / RAG 知识库 / 安全加固
 
@@ -32,6 +32,13 @@
 插入迭代 H ✅ 管理端可视化页面：纯前端 Admin Console（hash 路由 #/admin + Token 登录 +
    MCP 只读面板 + 工具注册表 CRUD + 审计日志页，零新依赖/后端零改动；
    冒烟修复迭代G潜伏的 MyBatis-Plus 分页拦截器缺失）
+   ↓
+迭代5 ✅ SDD 子 Agent 编排：Planner 首调路由（direct 直答/plan 拆解）→ Executor 顺序
+   执行 → 再规划循环 → Planner 兼汇总流式；app.sdd.* 全外置默认关（关闭与迭代4 逐字节一致）；
+   Executor 共享对话链路同一 ToolMount（DB+MCP 全量工具/帧/审计/幂等/脱敏横切零改动继承），
+   Planner 不挂工具、编排层不触达 ConversationStore；event:plan/event:task 帧 + 前端 Steps
+   竖向面板（工具块上方）；agent_orchestration_run 懒建表审计（run_id 与工具审计 call_id
+   前缀关联）；六类触顶强制收尾；真实方舟+MCP+MySQL 冒烟 7 组全 PASS 零修复
 ```
 
 ## 主线功能演进
@@ -44,7 +51,7 @@
 | 插入迭代 G | 工具能力底座（G） | DB 驱动的工具注册表：`agent_tool`/`agent_tool_call_log` 两表（懒建表+种子），工具元数据 DB 维护、运行时**动态组装 ToolCallback**（新增同类型工具=插 DB 行不发版）；BUILTIN 日志分析（纯 JDK 扫 logs/：时间窗/级别计数/异常分组/堆栈片段）+ SCRIPT 白名单执行器（canonical 防逃逸、argv 数组禁 sh -c、超时强杀、环境净化、示例脚本）；管理端 `/api/admin/tools` CRUD + 审计分页（**X-Admin-Token 首个鉴权接口**：503 未配置/401 未授权/400 开关关闭）；SSE 新增 `event:tool` 帧 + ToolCallBridge（ToolContext 透传）+ 前端工具调用折叠块；工具结果密钥脱敏、三层去重（requestId+dedupKey+call_id）防流式重试重跑 | ✅ 已交付（后端 **406** 测试全绿：219 既有 + 187 新增；前端 **95** 测试全绿、tsc/build 零错误；真实 MySQL+方舟+Vite proxy 冒烟 SMOKE-1~6 全 PASS **零冒烟修复**：工具全链路/event:tool 帧序/假密钥脱敏/SCRIPT 真实执行/审计/401·400·404；TDD 期实测修复 M7 toolContext 禁 null 值 1 处；分支 feat/db-tool-log-analysis 已推送 commit 4342aff） | `20260904-...-db-tool-log-analysis` |
 | 迭代 4 | MCP 工具（B） | **MCP Client（stdio）接入外部工具生态**：选型 mcp-core 0.14.0 离线手工装配（不引 starter/webflux），`app.tools.mcp.*` yml 白名单声明 server（重启生效）；启动 eager 握手+listTools 发现（everything 13 + fs 14 = 27 工具），失败隔离 UNAVAILABLE 不阻断、崩溃标记不自动重启、stderr 消费、@PreDestroy closeGracefully 零孤儿；发现工具经 **McpToolCallback 包装层**挂载（SyncMcpToolCallback 不支持 ToolContext，包装层复用 G 的 event:tool 帧/审计 handler_type=MCP/脱敏/截断/超时/三层幂等/全捕获）；`<server>_<tool>` 命名规整、与 DB 工具同点合并挂载（冲突跳过 WARN、空配置与 G 逐字节一致）；管理端只读 `GET /api/admin/mcp/servers`（无 env）+ 审计 handlerType 过滤 + tool_name 列放宽 VARCHAR(128) 幂等迁移 | ✅ 已交付（后端 **494** 测试全绿：406 既有 + 88 新增；前端 **95** 零改造；真实方舟+MySQL+双 server 冒烟 SMOKE-0/2~10 全 PASS：echo 全链路/fs 目录内读写/越权拒绝/崩溃 UNAVAILABLE/无孤儿/审计 MCP 过滤/401·405；冒烟修复 1 处低危——UNAVAILABLE 视图清空工具清单；分支 feat/mcp-tool-client 已推送 commits 1df1828+a3b40a6） | `20260904-...-mcp-tool-client` |
 | 插入迭代 H | 管理端可视化页面（H） | **纯前端管理控制台**：自写 hash 路由 `#/admin`（~35 行，对话页常驻 CSS 切换不丢状态，AdminConsole React.lazy 分包）；Admin Token 登录（内存+localStorage 独立键静默降级、验证期暂存内存、401 client 层广播顶层登出去重、仅 /api/admin/** 注头）；MCP 服务器只读面板（Badge/command/args/工具清单 Collapse/lastError Alert，无 env 无写、写方法 405）；工具注册表 CRUD（列表/启停 Switch 乐观更新失败回滚/详情抽屉/新建编辑表单预校验+Modal.confirm+PATCH 全字段不带 name+400 中文透传+503 已落库文案/删除二次确认）；审计日志页（0 基分页、toolName/sessionId/status/handlerType/时间范围过滤、失败行展开 errorMessage、手动刷新不轮询）；长文本一律 `<pre>` 纯文本不渲染 markdown/HTML；错误码差异化中文文案 | ✅ 已交付（前端 **170** 测试全绿：95 既有零修改 + 75 新增；后端 **495** 测试全绿；tsc 0 错误、vite build 独立懒加载 chunk、零新依赖；真实后端+双 MCP server+Vite proxy 冒烟 11 组全 PASS：**冒烟修复 1 处中危——迭代 G 潜伏的 MyBatis-Plus 分页拦截器缺失（审计分页 total=0/未分页）**；分支 feat/admin-management-ui 已推送 commits 1bb2052+a3c3bb7） | `20260907-...-admin-management-ui` |
-| 迭代 5 | SDD 子 Agent（C） | 任务拆解 → 规划者/执行者多 Agent 编排，对话服务作为底层模型调用能力被复用 | ⏳ 待开始 | — |
+| 迭代 5 | SDD 子 Agent（C） | **Planner/Executor 顺序循环 + 再规划**（Plan-and-Execute）：`app.sdd.*` 14 键全外置、默认 `enabled=false`（条件装配 + ObjectProvider 收口，关闭与迭代4 逐字节一致）；Planner 首调结构化路由（`direct` 一次调用直答 24 码点拆帧 / `plan` 任务拆解），Executor 顺序执行任务后 Planner 再规划（`next`/`final`），Planner 兼 Synth 流式汇总；协议容错四道防线（代码块/平衡括号提取→fastjson2→重试1→路由失败降级直答/再规划失败强制收尾）；**Executor 共享对话链路同一 ToolMount**（Flux 外创建、DB+MCP 全量工具、同一 bridge/requestId/toolContext，event:tool 帧/审计/三层幂等/脱敏/超时横切零改动继承），Planner/Synth 不挂工具；编排层不注入 ConversationStore（历史以 List&lt;Message&gt; 瞬态传入，chat_message 仅落 user+最终答案）；每次模型调用新建 `prompt()` spec（M7 Advisor 链独立性实证）、sdd-orchestrator/sdd-model-call 双 daemon 池、总预算 SSE 110s/同步 55s 先于容器超时；六类触顶（轮次6/任务8/连续失败2/墙钟/重复规划/任务超时）强制收尾且答案标注未完成；SSE 新增 `event:plan`/`event:task` 帧（OrchEventBridge，五终止路径 detach、fastjson2 null 省键、error 脱敏≤500）；前端 PlanTaskBlocks（antd Steps 竖向、taskId upsert 原地更新、挂工具块上方、仅当前流式消息持有）；`agent_orchestration_run` 懒建表 best-effort 审计（role PLANNER/EXECUTOR/SYNTH、run_id=挂载 requestId 与 agent_tool_call_log.call_id 前缀关联、无外键无 admin 页）；请求体可选 `Boolean sdd` 三态（null 随开关/false 绕过/开关关时 true warn 忽略） | ✅ 已交付（后端 **595** 测试全绿：495 既有断言零修改 + 100 新增；前端 **186** 测试全绿：170 既有 + 16 新增；tsc 0 错误、vite build 通过；真实方舟+MySQL+双 MCP server+Vite proxy 冒烟 7 组全 PASS **零冒烟修复**：direct 判定/plan 多任务+MCP 工具真实挂载/再规划台账/sdd:false 绕过/轮次触顶 truncated+强制收尾/两审计表前缀关联/代理透传；2 个 low 观察项（SYNTH 审计 model 列为空、Planner 偶发冗余任务无副作用）；分支 feat/sdd-subagent-orchestration 已推送 commit c3b33a1） | `20260908-...-sdd-subagent-orchestration` |
 | 待定 | RAG 知识库（E） | PG 15432 + pgvector：文档切片 → embedding → 检索增强问答；可复用 MCP 工具能力 | ⏳ 待开始 | — |
 | 插入迭代 F | 前端对话页（F） | 仓库重构为 `backend/`+`frontend/` 双子目录（T0 纯 git mv，历史保留、146 基线零回归）；后端新增会话管理 REST（`/api/sessions` 列表/历史/重命名/删除，400/404/503 齐备）+ 首轮用户消息自动生成会话标题（20/30 codePoint 截断，best-effort）；前端 Vite5+React18+TS+antd5：fetch 手写 SSE 分帧消费（30s 看门狗、AbortController 双 reason 停止/超时）、会话侧边栏（列表/切换/重命名/删除/骨架/重试，流式中切换阻止）、Markdown 渲染（gfm+highlight，禁 rehype-raw，XSS 回归测试、代码块复制）、Enter/Shift+Enter/IME 输入、自动贴底滚动、错误码差异化文案、草稿与刷新恢复（localStorage 仅存非敏感 UI 状态）；生产同源部署（后端无 CORS，nginx 反代 `proxy_buffering off` 等 SSE 指令） | ✅ 已交付（后端 **219** 测试全绿：146 既有 + 73 新增；前端 **83** 测试全绿、`tsc -b && vite build` 零错误；真实 MySQL 8 + 方舟 + Vite proxy 双进程冒烟 PASS：页面/proxy/会话 CRUD/标题落库/级联删除/三态/400/404 全过；冒烟修复 2 处线网问题——SSE 帧被 fastjson2 JSON 转义（迭代3 潜伏）、MySQL UTC 时间差 8h；分支 feat/frontend-chat-ui 已推送 commits 98f734e+a59e4f8） | `20260903-...-frontend-chat-ui` |
 
