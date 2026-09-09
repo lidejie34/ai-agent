@@ -201,7 +201,8 @@ curl -X POST http://localhost:8080/api/chat \
 
 - **BUILTIN（内置）**：处理器为容器内实现 `BuiltinTool` 接口的 Spring bean，DB 行的
   `handler_config.bean` 引用其 key；新增内置工具 = 写一个 bean + 管理端登记一行。指南文本
-  （guide_md）可在管理端热更新，写后立即对新对话生效。
+  （guide_md）拼入工具定义的 description，随 tools 数组在模型**调用前**可见（前置规则如
+  参数收集/名称解析据此生效），管理端热更新写后立即对新对话生效。
 - **SCRIPT（白名单脚本）**：`app.tools.script-dir` 目录内、经管理端登记的 shell 脚本，执行器以
   `/bin/sh <file>` + argv 数组方式运行（禁 `-c`）、环境变量白名单注入、工作目录锁定、超时强杀、
   输出截断；脚本需先放入白名单目录并经人工审计，再在管理端登记启用。

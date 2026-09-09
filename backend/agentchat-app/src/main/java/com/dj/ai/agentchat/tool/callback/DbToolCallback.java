@@ -47,7 +47,8 @@ import java.util.concurrent.TimeoutException;
  *   <li><b>超时</b>：handler 执行提交 tool-executor 专用 daemon 池，{@code Future.get(timeoutMs)}
  *       超时 cancel(true) + 结构化 TIMEOUT；</li>
  *   <li><b>脱敏 + 截断</b>：结果文本经 SecretRedactor 后按 output_max_chars 截断（带截断标记）；</li>
- *   <li><b>指南注入</b>（S2）：{@code <tool-guide>} 段前置到每次结果（仅被调用工具的指南进上下文）；</li>
+ *   <li><b>指南前置</b>（S2 修订）：guide_md 拼进 ToolDefinition.description，随 tools 数组
+ *       在模型决定「是否调用/怎么传参」之前可见；结果只包 {@code <tool-result>}，不再重复指南；</li>
  *   <li><b>幂等</b>（S4）：dedupKey=requestId|toolName|sha1(参数JSON)，bridge 缓存命中直接返回，
  *       不重复执行/审计/发帧；审计表 call_id 唯一索引兜底；</li>
  *   <li><b>审计</b>（AC-37/38）：终态后 best-effort 写 agent_tool_call_log，失败仅 log.error。</li>
@@ -90,12 +91,26 @@ public class DbToolCallback implements ToolCallback {
 
     @Override
     public ToolDefinition getToolDefinition() {
-        // 三字符串逐字来自 DB 行（AC-10）
+        // name/inputSchema 逐字来自 DB 行（AC-10）；description = 描述 + guide 全文（指南前置）
         return DefaultToolDefinition.builder()
                 .name(tool.getToolName())
-                .description(tool.getDescription())
+                .description(composeDescription())
                 .inputSchema(tool.getInputSchema())
                 .build();
+    }
+
+    /**
+     * 指南前置（S2 修订）：guide_md 非空时全文拼到 DB 描述之后，随 ToolDefinition
+     * 进入每轮请求的 tools 数组——模型在<b>调用前</b>就能看到前置规则（如参数收集、
+     * 名称解析），而非等结果回来才读到。guide 为空时描述逐字来自 DB 行。
+     */
+    private String composeDescription() {
+        String description = tool.getDescription();
+        String guide = tool.getGuideMd();
+        if (!StringUtils.hasText(guide)) {
+            return description;
+        }
+        return description + "\n\n" + guide;
     }
     // getToolMetadata() 不覆写：returnDirect=false 默认（结果回模型，不直接回用户）
 
@@ -137,7 +152,7 @@ public class DbToolCallback implements ToolCallback {
         String rawBody = result.ok() ? result.text() : buildErrorJson(result);
         String redacted = redactor.redact(rawBody == null ? "" : rawBody);
         String body = truncate(redacted, effectiveOutputMaxChars());
-        String resultText = wrapGuide(body);
+        String resultText = wrapResult(body);
 
         // 4) 审计 best-effort（失败仅日志，不影响对话/结果）
         auditService.record(buildLogPo(dedupKey, sessionId, safeInput, result, duration, resultText));
@@ -230,17 +245,11 @@ public class DbToolCallback implements ToolCallback {
     }
 
     /**
-     * 指南注入（S2）：guide_md 全文作为 {@code <tool-guide>} 段前置；
-     * 结果体包 {@code <tool-result>}。guide 为 null 时只包 result。
+     * 结果体包 {@code <tool-result>}（与 McpToolCallback 一致）。指南已前置进
+     * ToolDefinition.description，此处不再重复注入。
      */
-    private String wrapGuide(String body) {
-        String resultBlock = "<tool-result>\n" + body + "\n</tool-result>";
-        String guide = tool.getGuideMd();
-        if (!StringUtils.hasText(guide)) {
-            return resultBlock;
-        }
-        return "<tool-guide name=\"" + tool.getToolName() + "\">\n"
-                + guide + "\n</tool-guide>\n" + resultBlock;
+    private String wrapResult(String body) {
+        return "<tool-result>\n" + body + "\n</tool-result>";
     }
 
     private AgentToolCallLogPO buildLogPo(String dedupKey, String sessionId, String toolInput,

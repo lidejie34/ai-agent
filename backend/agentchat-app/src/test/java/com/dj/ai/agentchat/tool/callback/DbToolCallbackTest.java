@@ -40,8 +40,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * T4：DbToolCallback 核心闭环——双参 call 不抛 UnsupportedOperationException、
- * 全异常捕获结构化回传、Future 超时、脱敏、截断、guide 前缀、幂等去重、事件顺序、
- * 审计字段与 best-effort。
+ * 全异常捕获结构化回传、Future 超时、脱敏、截断、guide 前置进 description、幂等去重、
+ * 事件顺序、审计字段与 best-effort。
  */
 class DbToolCallbackTest {
 
@@ -146,23 +146,31 @@ class DbToolCallbackTest {
     }
 
     @Test
-    void toolDefinition_stringsComeVerbatimFromDbRow() {
+    void toolDefinition_guidePrefixedIntoDescription() {
         var def = callback().getToolDefinition();
         assertThat(def.name()).isEqualTo("demo_builtin_tool");
-        assertThat(def.description()).isEqualTo("分析日志错误");
         assertThat(def.inputSchema()).isEqualTo("{\"type\":\"object\"}");
+        // 指南前置（S2 修订）：description = DB 描述 + 全文 guide，随 tools 数组
+        // 在模型决定是否/如何调用之前可见
+        assertThat(def.description()).isEqualTo("分析日志错误\n\n# 指南标题\n指南正文内容");
     }
 
     @Test
-    void doubleArgCall_executesHandlerAndWrapsGuideAndResult() {
+    void toolDefinition_guideNull_descriptionVerbatimFromDbRow() {
+        tool.setGuideMd(null);
+        var def = callback().getToolDefinition();
+        assertThat(def.description()).isEqualTo("分析日志错误");
+    }
+
+    @Test
+    void doubleArgCall_executesHandlerAndWrapsResultOnly() {
         handler.result = ToolExecutionResult.success("## 分析结果\nERROR=0");
 
         String out = callback().call("{\"minutes\":30}", context(new ToolCallBridge(), "sess-1", "req-1"));
 
-        // 指南前缀注入（S2）
-        assertThat(out).contains("<tool-guide name=\"demo_builtin_tool\">")
-                .contains("# 指南标题")
-                .contains("<tool-result>")
+        // 指南已前置进 ToolDefinition.description，结果只包 <tool-result>，不再重复指南
+        assertThat(out).doesNotContain("<tool-guide").doesNotContain("# 指南标题");
+        assertThat(out).startsWith("<tool-result>")
                 .contains("## 分析结果\nERROR=0");
         // 双参 call 被框架路径调用，handler 确实执行（非 UnsupportedOperationException 路径）
         assertThat(handler.invocations.get()).isEqualTo(1);
@@ -241,9 +249,7 @@ class DbToolCallbackTest {
     }
 
     @Test
-    void guideNull_resultWrappedWithoutGuideBlock() {
-        tool.setGuideMd(null);
-
+    void result_alwaysWrappedInToolResultEnvelope() {
         String result = callback().call("{}", context(new ToolCallBridge(), null, "req-7"));
 
         assertThat(result).doesNotContain("<tool-guide");

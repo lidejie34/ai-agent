@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS agent_tool (
   input_schema     JSON          NOT NULL COMMENT '入参 JSON Schema（逐字成为 ToolDefinition.inputSchema）',
   handler_type     VARCHAR(16)   NOT NULL COMMENT 'BUILTIN / SCRIPT（HTTP / SCRIPT_DB 预留不挂载）',
   handler_config   JSON          NOT NULL COMMENT '处理器配置：BUILTIN {"bean":"..."}；SCRIPT {"script":"文件名"}',
-  guide_md         MEDIUMTEXT    NULL COMMENT 'SKILL.md 式操作指南全文（种子取 classpath skills/）',
+  guide_md         MEDIUMTEXT    NULL COMMENT 'SKILL.md 式操作指南全文（管理端维护，热更新对新对话生效）',
   enabled          TINYINT(1)    NOT NULL DEFAULT 1 COMMENT '是否启用挂载',
   timeout_ms       INT           NOT NULL DEFAULT 30000 COMMENT '单次执行超时毫秒（硬上限 60000）',
   output_max_chars INT           NOT NULL DEFAULT 8000 COMMENT '回传模型结果最大字符数',

@@ -35,7 +35,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * T7/T10 联动（AC-36）：管理端修改 guide_md → 写后 {@link ToolRegistry#refresh()} →
- * 新装配回调的结果文本携带<b>新指南</b>；旧快照回调仍带旧指南（快照替换语义）。
+ * 新装配回调的 ToolDefinition.description 携带<b>新指南</b>（调用前对模型可见）；
+ * 旧快照回调的 description 仍带旧指南（快照替换语义）。结果文本不再含指南。
  *
  * <p>全离线：mapper/schema 为 mock，ToolCallbackFactory/ToolRegistry/
  * ToolAdminService 全部真实组件串联；selectList 第一次返回旧行、第二次返回新行，
@@ -113,12 +114,13 @@ class ToolAdminGuideRefreshTest {
 
     @Test
     void adminGuideChange_refresh_thenCallbackCarriesNewGuide() {
-        // 1) 刷新前：回调结果携带旧指南
+        // 1) 刷新前：工具定义 description 携带旧指南（模型调用前可见），结果文本不含指南
         List<ToolCallback> before = registry.toolCallbacks();
+        String descBefore = before.get(0).getToolDefinition().description();
+        assertThat(descBefore).contains(OLD_GUIDE).doesNotContain(NEW_GUIDE);
         String outBefore = before.get(0).call("{}",
                 new ToolContext(Map.of("requestId", "req-before")));
-        assertThat(outBefore).contains(OLD_GUIDE).doesNotContain(NEW_GUIDE);
-        assertThat(outBefore).contains("RESULT-BODY-MARKER");
+        assertThat(outBefore).contains("RESULT-BODY-MARKER").doesNotContain(OLD_GUIDE);
 
         // 2) 管理端 PATCH 仅改 guide_md
         ToolUpsertRequest patch = new ToolUpsertRequest(null, null, null, null, null,
@@ -127,11 +129,10 @@ class ToolAdminGuideRefreshTest {
         verify(toolMapper).updateById(any());
         assertThat(detail.guideMd()).isEqualTo(NEW_GUIDE);
 
-        // 3) 刷新后：新装配回调携带新指南，旧标记不再出现
+        // 3) 刷新后：新装配回调的 description 携带新指南，旧标记不再出现
         List<ToolCallback> after = registry.toolCallbacks();
-        String outAfter = after.get(0).call("{}",
-                new ToolContext(Map.of("requestId", "req-after")));
-        assertThat(outAfter).contains(NEW_GUIDE).doesNotContain(OLD_GUIDE);
+        String descAfter = after.get(0).getToolDefinition().description();
+        assertThat(descAfter).contains(NEW_GUIDE).doesNotContain(OLD_GUIDE);
     }
 
     private static AgentToolPO row(String guide) {
