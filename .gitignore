@@ -57,6 +57,9 @@ temp/
 # ========== MCP filesystem server 工作目录（迭代4，AC-29：专用目录不入仓） ==========
 mcp-workspace/
 
+# SCRIPT 工具白名单目录：脚本含本机绝对路径/环境差异，不入库（各机器自行放置；.gitkeep 保留）
+backend/agentchat-app/scripts/*.sh
+
 # ========== Optional 如果你后续加Java/Spring后端也兼容 ==========
 # target/
 # *.iml
