@@ -7,14 +7,12 @@ import com.dj.ai.agentchat.tool.handler.ToolHandler;
 import com.dj.ai.agentchat.tool.handler.ToolHandlerRouter;
 import com.dj.ai.agentchat.tool.handler.builtin.BuiltinTool;
 import com.dj.ai.agentchat.tool.handler.builtin.BuiltinToolHandler;
-import com.dj.ai.agentchat.tool.handler.builtin.LogAnalysisBuiltinTool;
 import com.dj.ai.agentchat.tool.handler.script.ScriptToolHandler;
 import com.dj.ai.agentchat.tool.mapper.AgentToolCallLogMapper;
 import com.dj.ai.agentchat.tool.mapper.AgentToolMapper;
 import com.dj.ai.agentchat.tool.registry.ToolRegistry;
 import com.dj.ai.agentchat.tool.schema.ToolSchemaInitializer;
 import com.dj.ai.agentchat.tool.schema.ToolSchemaStartupRunner;
-import com.dj.ai.agentchat.tool.schema.ToolSeeder;
 import com.dj.ai.agentchat.tool.security.SecretRedactor;
 import com.dj.ai.agentchat.tool.support.DefaultToolSupport;
 import com.dj.ai.agentchat.tool.support.ToolSupport;
@@ -73,20 +71,12 @@ public class ToolRuntimeConfig {
     }
 
     /**
-     * 幂等种子器：缺行才插（analyze_log_errors 启用 / log_error_count 默认禁用）。
+     * 启动期 best-effort 建表：失败仅 warn 不阻断启动。
+     * 工具行不再自动种子，注册表内容完全由管理端维护。
      */
     @Bean
-    public ToolSeeder toolSeeder(AgentToolMapper agentToolMapper) {
-        return new ToolSeeder(agentToolMapper);
-    }
-
-    /**
-     * 启动期 best-effort 建表 + 种子：失败仅 warn 不阻断启动。
-     */
-    @Bean
-    public ToolSchemaStartupRunner toolSchemaStartupRunner(ToolSchemaInitializer toolSchemaInitializer,
-                                                           ToolSeeder toolSeeder) {
-        return new ToolSchemaStartupRunner(toolSchemaInitializer, toolSeeder);
+    public ToolSchemaStartupRunner toolSchemaStartupRunner(ToolSchemaInitializer toolSchemaInitializer) {
+        return new ToolSchemaStartupRunner(toolSchemaInitializer);
     }
 
     /**
@@ -112,15 +102,6 @@ public class ToolRuntimeConfig {
         List<String> extra = properties.getRedactPatterns() == null
                 ? List.of() : properties.getRedactPatterns();
         return new SecretRedactor(extra);
-    }
-
-    /**
-     * 内置日志分析工具实现（key=analyzeLogErrors，纯 JDK NIO + 正则）。
-     */
-    @Bean
-    public LogAnalysisBuiltinTool analyzeLogErrors(ToolProperties properties,
-                                                   SecretRedactor secretRedactor) {
-        return new LogAnalysisBuiltinTool(properties, secretRedactor);
     }
 
     /**
@@ -176,10 +157,8 @@ public class ToolRuntimeConfig {
     @Bean
     public ToolRegistry toolRegistry(AgentToolMapper agentToolMapper,
                                      ToolCallbackFactory toolCallbackFactory,
-                                     ToolSchemaInitializer toolSchemaInitializer,
-                                     ToolSeeder toolSeeder) {
-        return new ToolRegistry(agentToolMapper, toolCallbackFactory,
-                toolSchemaInitializer, toolSeeder);
+                                     ToolSchemaInitializer toolSchemaInitializer) {
+        return new ToolRegistry(agentToolMapper, toolCallbackFactory, toolSchemaInitializer);
     }
 
     /**

@@ -53,7 +53,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ChatControllerToolFrameTest {
 
     private static final String STREAM_URL = "/api/chat/stream";
-    private static final String CALL_ID = "req-7|analyze_log_errors|aaa12345";
+    private static final String CALL_ID = "req-7|demo_builtin_tool|aaa12345";
 
     @Autowired
     private MockMvc mockMvc;
@@ -83,8 +83,8 @@ class ChatControllerToolFrameTest {
         MvcResult mvcResult = startStream();
 
         // 工具线程语义：控制器挂 sink 后，经 bridge 推 started + succeeded
-        bridge.publish(ToolEvent.started(CALL_ID, "analyze_log_errors", "{\"minutes\":30}"));
-        bridge.publish(ToolEvent.terminal(CALL_ID, "analyze_log_errors", "{\"minutes\":30}",
+        bridge.publish(ToolEvent.started(CALL_ID, "demo_builtin_tool", "{\"minutes\":30}"));
+        bridge.publish(ToolEvent.terminal(CALL_ID, "demo_builtin_tool", "{\"minutes\":30}",
                 true, 42L, null));
         // 模型随后基于工具结果产出
         sink.tryEmitNext("日志分析完毕");
@@ -94,7 +94,7 @@ class ChatControllerToolFrameTest {
 
         assertThat(body).contains("event:tool");
         assertThat(body).contains("\"callId\":\"" + CALL_ID + "\"");
-        assertThat(body).contains("\"tool\":\"analyze_log_errors\"");
+        assertThat(body).contains("\"tool\":\"demo_builtin_tool\"");
         assertThat(body).contains("\"arguments\":\"{\\\"minutes\\\":30}\"");
         // data: 载荷为合法 JSON（每帧单行，无裸换行、无反斜杠 n 转义）
         assertThat(body).doesNotContain("\\n");
@@ -125,7 +125,7 @@ class ChatControllerToolFrameTest {
         MvcResult mvcResult = startStream();
 
         // 模型尚无输出：仅工具帧到达 → 心跳计时必须重置（工具执行也算活动，AC-67）
-        bridge.publish(ToolEvent.started(CALL_ID, "analyze_log_errors", "{}"));
+        bridge.publish(ToolEvent.started(CALL_ID, "demo_builtin_tool", "{}"));
         verify(heartbeatHandle).reset();
 
         sink.tryEmitComplete();
@@ -141,8 +141,8 @@ class ChatControllerToolFrameTest {
 
         MvcResult mvcResult = startStream();
 
-        bridge.publish(ToolEvent.started(CALL_ID, "log_error_count", "{}"));
-        bridge.publish(ToolEvent.terminal(CALL_ID, "log_error_count", "{}",
+        bridge.publish(ToolEvent.started(CALL_ID, "demo_script_tool", "{}"));
+        bridge.publish(ToolEvent.terminal(CALL_ID, "demo_script_tool", "{}",
                 false, 3000L, "工具执行超时（3000ms）"));
         sink.tryEmitNext("工具超时了");
         sink.tryEmitComplete();

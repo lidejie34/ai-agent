@@ -54,7 +54,7 @@ class ScriptToolHandlerTest {
     private AgentToolPO tool(String scriptName, String schema) {
         AgentToolPO po = new AgentToolPO();
         po.setId(1L);
-        po.setToolName("log_error_count");
+        po.setToolName("demo_script_tool");
         po.setHandlerType("SCRIPT");
         po.setHandlerConfig("{\"script\":\"" + scriptName + "\"}");
         po.setInputSchema(schema);
@@ -269,21 +269,4 @@ class ScriptToolHandlerTest {
         assertThat(r.text()).contains("partial-out");
     }
 
-    // ---------- 示例脚本对夹具跑出计数 ----------
-
-    @Test
-    void shippedSampleScript_countsErrorsAndWarns() throws IOException {
-        // 直接用仓库内示例脚本：script-dir 指向 backend/scripts，LOG_DIR 指向夹具日志目录
-        properties.setScriptDir("scripts");
-        String logLine = "2026-09-04T12:00:00.000  %5s 1 --- [t] c.d.a.X : msg\n";
-        Files.writeString(logDir.resolve("a.log"),
-                String.format(logLine, "ERROR") + String.format(logLine, "ERROR")
-                        + String.format(logLine, "WARN") + String.format(logLine, "INFO"));
-
-        ToolExecutionResult r = handler.execute(tool("log_error_count.sh", SCHEMA_MINUTES),
-                Map.of("minutes", 30), ctx(10_000, 4000));
-
-        assertThat(r.ok()).isTrue();
-        assertThat(r.text()).contains("ERROR_lines=2").contains("WARN_lines=1");
-    }
 }

@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 工具表懒建表器（插入迭代 G，范式复刻 ChatMemorySchemaInitializer）。
  *
- * <p>首次工具路径（ToolRegistry 装载 / ToolSeeder 种子 / 管理端写操作）调用
+ * <p>首次工具路径（ToolRegistry 装载 / 管理端写操作）调用
  * {@link #ensureSchema()}：经 DataSource 取连接 + spring-jdbc {@link ScriptUtils}
  * 执行 classpath {@code db/agent-tool-schema.sql}（两条 CREATE TABLE IF NOT EXISTS，
  * 幂等）。{@link AtomicBoolean} 成功后短路；失败（连接拒绝/ScriptException，同属

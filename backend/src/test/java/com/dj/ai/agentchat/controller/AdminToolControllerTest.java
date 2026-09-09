@@ -93,7 +93,7 @@ class AdminToolControllerTest {
             when(service.listTools()).thenReturn(List.of(
                     new ToolListItem(1L, "analyze_log", "分析日志", "BUILTIN", true, 30000, 8000, 128,
                             null, null),
-                    new ToolListItem(2L, "log_error_count", "脚本工具", "SCRIPT", false, 30000, 8000, 0,
+                    new ToolListItem(2L, "demo_script_tool", "脚本工具", "SCRIPT", false, 30000, 8000, 0,
                             null, null)));
 
             String body = mvc.perform(get("/api/admin/tools").header(HDR, TOKEN))
@@ -119,7 +119,7 @@ class AdminToolControllerTest {
             JSONObject schema = new JSONObject();
             schema.put("type", "object");
             JSONObject config = new JSONObject();
-            config.put("bean", "analyzeLogErrors");
+            config.put("bean", "demoBeanKey");
             when(service.getTool(7L)).thenReturn(new ToolDetail(7L, "analyze_log", "描述", schema,
                     "BUILTIN", config, "指南全文", true, 30000, 8000, null, null));
 
@@ -129,7 +129,7 @@ class AdminToolControllerTest {
 
             // inputSchema 是嵌套 JSON 对象（不是转义字符串），guide 全文仅详情含
             assertThat(body).contains("\"inputSchema\":{\"type\":\"object\"}")
-                    .contains("\"handlerConfig\":{\"bean\":\"analyzeLogErrors\"}")
+                    .contains("\"handlerConfig\":{\"bean\":\"demoBeanKey\"}")
                     .contains("指南全文").doesNotContain("\\\"type\\\"");
         }
 
@@ -154,7 +154,7 @@ class AdminToolControllerTest {
             String requestBody = """
                     {"name":"analyze_log","description":"分析日志错误",
                      "inputSchema":{"type":"object","properties":{"minutes":{"type":"integer"}}},
-                     "handlerType":"BUILTIN","handlerConfig":{"bean":"analyzeLogErrors"}}
+                     "handlerType":"BUILTIN","handlerConfig":{"bean":"demoBeanKey"}}
                     """;
             String body = mvc.perform(post("/api/admin/tools").header(HDR, TOKEN)
                             .contentType(MediaType.APPLICATION_JSON).content(requestBody))

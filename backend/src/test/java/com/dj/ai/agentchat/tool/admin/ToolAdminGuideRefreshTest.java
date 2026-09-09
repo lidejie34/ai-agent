@@ -16,7 +16,6 @@ import com.dj.ai.agentchat.tool.po.AgentToolPO;
 import com.dj.ai.agentchat.tool.registry.HandlerType;
 import com.dj.ai.agentchat.tool.registry.ToolRegistry;
 import com.dj.ai.agentchat.tool.schema.ToolSchemaInitializer;
-import com.dj.ai.agentchat.tool.schema.ToolSeeder;
 import com.dj.ai.agentchat.tool.security.SecretRedactor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,7 +37,7 @@ import static org.mockito.Mockito.when;
  * T7/T10 联动（AC-36）：管理端修改 guide_md → 写后 {@link ToolRegistry#refresh()} →
  * 新装配回调的结果文本携带<b>新指南</b>；旧快照回调仍带旧指南（快照替换语义）。
  *
- * <p>全离线：mapper/schema/seeder 为 mock，ToolCallbackFactory/ToolRegistry/
+ * <p>全离线：mapper/schema 为 mock，ToolCallbackFactory/ToolRegistry/
  * ToolAdminService 全部真实组件串联；selectList 第一次返回旧行、第二次返回新行，
  * 模拟「PATCH 落库后刷新读到新数据」。
  */
@@ -87,14 +86,13 @@ class ToolAdminGuideRefreshTest {
                 executor, properties);
 
         ToolSchemaInitializer schemaInitializer = mock(ToolSchemaInitializer.class);
-        ToolSeeder seeder = mock(ToolSeeder.class);
-        registry = new ToolRegistry(toolMapper, factory, schemaInitializer, seeder);
+        registry = new ToolRegistry(toolMapper, factory, schemaInitializer);
 
         // 管理端校验需要 bean 存在
         BuiltinTool builtin = new BuiltinTool() {
             @Override
             public String key() {
-                return "analyzeLogErrors";
+                return "demoBeanKey";
             }
 
             @Override
@@ -143,7 +141,7 @@ class ToolAdminGuideRefreshTest {
         po.setDescription("分析日志错误");
         po.setInputSchema("{\"type\":\"object\"}");
         po.setHandlerType("BUILTIN");
-        po.setHandlerConfig("{\"bean\":\"analyzeLogErrors\"}");
+        po.setHandlerConfig("{\"bean\":\"demoBeanKey\"}");
         po.setGuideMd(guide);
         po.setEnabled(true);
         po.setTimeoutMs(30000);

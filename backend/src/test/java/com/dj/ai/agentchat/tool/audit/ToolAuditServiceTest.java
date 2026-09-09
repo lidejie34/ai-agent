@@ -23,8 +23,8 @@ class ToolAuditServiceTest {
 
     private AgentToolCallLogPO samplePo() {
         AgentToolCallLogPO po = new AgentToolCallLogPO();
-        po.setCallId("req-1|analyze_log_errors|abc");
-        po.setToolName("analyze_log_errors");
+        po.setCallId("req-1|demo_builtin_tool|abc");
+        po.setToolName("demo_builtin_tool");
         po.setHandlerType("BUILTIN");
         po.setStatus("SUCCESS");
         po.setDurationMs(123L);

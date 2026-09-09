@@ -85,7 +85,7 @@ class PathGuardTest {
     void safeName_acceptsCommonLogFileNames() {
         assertThat(PathGuard.isSafeFileName("application.log")).isTrue();
         assertThat(PathGuard.isSafeFileName("app.2026-09-04.log")).isTrue();
-        assertThat(PathGuard.isSafeFileName("log_error_count.sh")).isTrue();
+        assertThat(PathGuard.isSafeFileName("demo_script.sh")).isTrue();
         assertThat(PathGuard.isSafeFileName("../x.log")).isFalse();
         assertThat(PathGuard.isSafeFileName("a/b.log")).isFalse();
         assertThat(PathGuard.isSafeFileName(null)).isFalse();

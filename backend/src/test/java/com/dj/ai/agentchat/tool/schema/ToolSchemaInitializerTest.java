@@ -83,40 +83,23 @@ class ToolSchemaInitializerTest {
     }
 
     @Test
-    void startupRunner_happyPath_ensuresSchemaAndSeeds() throws Exception {
-        ToolSeeder seeder = mock(ToolSeeder.class);
-        ToolSchemaStartupRunner runner = new ToolSchemaStartupRunner(initializer, seeder);
+    void startupRunner_happyPath_ensuresSchema() throws Exception {
+        ToolSchemaStartupRunner runner = new ToolSchemaStartupRunner(initializer);
 
         assertThatCode(() -> runner.run(null)).doesNotThrowAnyException();
 
         verify(dataSource).getConnection();
-        verify(seeder).seedIfAbsent();
     }
 
     @Test
-    void startupRunner_schemaFailure_isSwallowed_andSeederNotInvoked() throws Exception {
+    void startupRunner_schemaFailure_isSwallowed() throws Exception {
         ToolSchemaInitializer failingInitializer = mock(ToolSchemaInitializer.class);
-        ToolSeeder seeder = mock(ToolSeeder.class);
         org.mockito.Mockito.doThrow(new CannotGetJdbcConnectionException("DB down"))
                 .when(failingInitializer).ensureSchema();
-        ToolSchemaStartupRunner runner = new ToolSchemaStartupRunner(failingInitializer, seeder);
+        ToolSchemaStartupRunner runner = new ToolSchemaStartupRunner(failingInitializer);
 
         // best-effort：任何异常仅 warn，绝不阻断启动（AC-5）
         assertThatCode(() -> runner.run(null)).doesNotThrowAnyException();
         verify(failingInitializer).ensureSchema();
-        verify(seeder, never()).seedIfAbsent();
-    }
-
-    @Test
-    void startupRunner_seederFailure_isSwallowed() throws Exception {
-        ToolSchemaInitializer okInitializer = mock(ToolSchemaInitializer.class);
-        ToolSeeder failingSeeder = mock(ToolSeeder.class);
-        org.mockito.Mockito.doThrow(new CannotGetJdbcConnectionException("DB down"))
-                .when(failingSeeder).seedIfAbsent();
-        ToolSchemaStartupRunner runner = new ToolSchemaStartupRunner(okInitializer, failingSeeder);
-
-        assertThatCode(() -> runner.run(null)).doesNotThrowAnyException();
-        verify(okInitializer).ensureSchema();
-        verify(failingSeeder).seedIfAbsent();
     }
 }

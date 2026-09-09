@@ -109,11 +109,11 @@ class DbToolCallbackTest {
 
         tool = new AgentToolPO();
         tool.setId(1L);
-        tool.setToolName("analyze_log_errors");
+        tool.setToolName("demo_builtin_tool");
         tool.setDescription("分析日志错误");
         tool.setInputSchema("{\"type\":\"object\"}");
         tool.setHandlerType("BUILTIN");
-        tool.setHandlerConfig("{\"bean\":\"analyzeLogErrors\"}");
+        tool.setHandlerConfig("{\"bean\":\"demoBeanKey\"}");
         tool.setGuideMd("# 指南标题\n指南正文内容");
         tool.setEnabled(true);
         tool.setTimeoutMs(5000);
@@ -148,7 +148,7 @@ class DbToolCallbackTest {
     @Test
     void toolDefinition_stringsComeVerbatimFromDbRow() {
         var def = callback().getToolDefinition();
-        assertThat(def.name()).isEqualTo("analyze_log_errors");
+        assertThat(def.name()).isEqualTo("demo_builtin_tool");
         assertThat(def.description()).isEqualTo("分析日志错误");
         assertThat(def.inputSchema()).isEqualTo("{\"type\":\"object\"}");
     }
@@ -160,7 +160,7 @@ class DbToolCallbackTest {
         String out = callback().call("{\"minutes\":30}", context(new ToolCallBridge(), "sess-1", "req-1"));
 
         // 指南前缀注入（S2）
-        assertThat(out).contains("<tool-guide name=\"analyze_log_errors\">")
+        assertThat(out).contains("<tool-guide name=\"demo_builtin_tool\">")
                 .contains("# 指南标题")
                 .contains("<tool-result>")
                 .contains("## 分析结果\nERROR=0");
@@ -172,9 +172,9 @@ class DbToolCallbackTest {
 
         AgentToolCallLogPO po = lastAuditPo();
         assertThat(po.getStatus()).isEqualTo("SUCCESS");
-        assertThat(po.getToolName()).isEqualTo("analyze_log_errors");
+        assertThat(po.getToolName()).isEqualTo("demo_builtin_tool");
         assertThat(po.getSessionId()).isEqualTo("sess-1");
-        assertThat(po.getCallId()).startsWith("req-1|analyze_log_errors|");
+        assertThat(po.getCallId()).startsWith("req-1|demo_builtin_tool|");
         assertThat(po.getResultChars()).isEqualTo(out.length());
         assertThat(po.getDurationMs()).isGreaterThanOrEqualTo(0);
     }
@@ -301,7 +301,7 @@ class DbToolCallbackTest {
         assertThat(result).contains("stub-result");
         AgentToolCallLogPO po = lastAuditPo();
         assertThat(po.getSessionId()).isNull();
-        assertThat(po.getCallId()).startsWith("no-request|analyze_log_errors|");
+        assertThat(po.getCallId()).startsWith("no-request|demo_builtin_tool|");
     }
 
     @Test

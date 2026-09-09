@@ -71,7 +71,7 @@ class ToolAdminServiceTest {
         BuiltinTool builtin = new BuiltinTool() {
             @Override
             public String key() {
-                return "analyzeLogErrors";
+                return "demoBeanKey";
             }
 
             @Override
@@ -97,7 +97,7 @@ class ToolAdminServiceTest {
         schema.put("type", "object");
         schema.put("properties", new JSONObject());
         JSONObject config = new JSONObject();
-        config.put("bean", "analyzeLogErrors");
+        config.put("bean", "demoBeanKey");
         return new ToolUpsertRequest(name, "分析日志错误", schema, "BUILTIN", config,
                 "操作指南全文", true, null, null);
     }
@@ -148,7 +148,7 @@ class ToolAdminServiceTest {
         assertThat(po.getOutputMaxChars()).isEqualTo(8000);
         // JSON 列存文本
         assertThat(po.getInputSchema()).contains("\"type\"").contains("object");
-        assertThat(po.getHandlerConfig()).contains("analyzeLogErrors");
+        assertThat(po.getHandlerConfig()).contains("demoBeanKey");
         assertThat(po.getGuideMd()).isEqualTo("操作指南全文");
         verify(registry).refresh();
         assertThat(detail.name()).isEqualTo("analyze_log");
@@ -157,13 +157,13 @@ class ToolAdminServiceTest {
 
     @Test
     void create_validScript_whenFileExists() throws Exception {
-        Files.writeString(tempDir.resolve("log_error_count.sh"), "#!/bin/sh\necho ok\n");
+        Files.writeString(tempDir.resolve("demo_script.sh"), "#!/bin/sh\necho ok\n");
         ToolDetail detail = service.createTool(
-                with(validBuiltin("log_error_count"), "log_error_count", null, null,
-                        "SCRIPT", scriptConfig("log_error_count.sh"), null, null, null));
+                with(validBuiltin("demo_script_tool"), "demo_script_tool", null, null,
+                        "SCRIPT", scriptConfig("demo_script.sh"), null, null, null));
 
         assertThat(detail.handlerType()).isEqualTo("SCRIPT");
-        assertThat(detail.handlerConfig().getString("script")).isEqualTo("log_error_count.sh");
+        assertThat(detail.handlerConfig().getString("script")).isEqualTo("demo_script.sh");
         verify(registry).refresh();
     }
 
@@ -214,13 +214,13 @@ class ToolAdminServiceTest {
     void create_schemaInvalid_400() {
         // schema 为 null
         assertInvalid(() -> service.createTool(
-                new ToolUpsertRequest("t_one", "d", null, "BUILTIN", beanConfig("analyzeLogErrors"),
+                new ToolUpsertRequest("t_one", "d", null, "BUILTIN", beanConfig("demoBeanKey"),
                         null, true, null, null)));
         // schema 缺 type/properties
         JSONObject bad = new JSONObject();
         bad.put("foo", 1);
         assertInvalid(() -> service.createTool(
-                new ToolUpsertRequest("t_three", "d", bad, "BUILTIN", beanConfig("analyzeLogErrors"),
+                new ToolUpsertRequest("t_three", "d", bad, "BUILTIN", beanConfig("demoBeanKey"),
                         null, true, null, null)));
     }
 
@@ -291,7 +291,7 @@ class ToolAdminServiceTest {
     @Test
     void list_includesDisabled_withGuideLength_withoutFullGuide() {
         AgentToolPO enabled = row(1L, "analyze_log", true, "12345");
-        AgentToolPO disabled = row(2L, "log_error_count", false, null);
+        AgentToolPO disabled = row(2L, "demo_script_tool", false, null);
         when(toolMapper.selectList(any())).thenReturn(List.of(enabled, disabled));
 
         List<ToolListItem> items = service.listTools();
@@ -326,7 +326,7 @@ class ToolAdminServiceTest {
         assertThat(detail.name()).isEqualTo("analyze_log");
         assertThat(detail.guideMd()).isEqualTo("指南全文");
         assertThat(detail.inputSchema().getString("type")).isEqualTo("object");
-        assertThat(detail.handlerConfig().getString("bean")).isEqualTo("analyzeLogErrors");
+        assertThat(detail.handlerConfig().getString("bean")).isEqualTo("demoBeanKey");
     }
 
     // ---------- 修改 / 删除 ----------
@@ -353,7 +353,7 @@ class ToolAdminServiceTest {
         when(toolMapper.selectById(any())).thenReturn(existing);
 
         ToolUpsertRequest req = with(validBuiltin("analyze_log"), null, "新的描述文本",
-                schemaObject(), null, beanConfig("analyzeLogErrors"), null, 12000, null);
+                schemaObject(), null, beanConfig("demoBeanKey"), null, 12000, null);
         ToolDetail detail = service.updateTool(1L, req, false);
 
         ArgumentCaptor<AgentToolPO> captor = ArgumentCaptor.forClass(AgentToolPO.class);
@@ -517,7 +517,7 @@ class ToolAdminServiceTest {
         po.setDescription("分析日志错误");
         po.setInputSchema("{\"type\":\"object\"}");
         po.setHandlerType("BUILTIN");
-        po.setHandlerConfig("{\"bean\":\"analyzeLogErrors\"}");
+        po.setHandlerConfig("{\"bean\":\"demoBeanKey\"}");
         po.setGuideMd(guide);
         po.setEnabled(enabled);
         po.setTimeoutMs(30000);

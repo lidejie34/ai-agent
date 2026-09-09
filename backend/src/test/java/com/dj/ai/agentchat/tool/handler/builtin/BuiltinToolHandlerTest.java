@@ -40,10 +40,10 @@ class BuiltinToolHandlerTest {
     @Test
     void validateConfig_knownBean_passes() {
         BuiltinTool stub = mock(BuiltinTool.class);
-        when(stub.key()).thenReturn("analyzeLogErrors");
+        when(stub.key()).thenReturn("demoBeanKey");
         BuiltinToolHandler handler = new BuiltinToolHandler(List.of(stub));
 
-        handler.validateConfig("{\"bean\":\"analyzeLogErrors\"}");
+        handler.validateConfig("{\"bean\":\"demoBeanKey\"}");
     }
 
     @Test

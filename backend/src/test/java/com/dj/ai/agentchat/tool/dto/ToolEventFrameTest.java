@@ -17,12 +17,12 @@ class ToolEventFrameTest {
     @Test
     void startedFrame_serializesWithoutNullFields() {
         ToolEventFrame frame = ToolEventFrame.from(ToolEvent.started(
-                "req-1|analyze_log_errors|abc123", "analyze_log_errors", "{\"minutes\":30}"));
+                "req-1|demo_builtin_tool|abc123", "demo_builtin_tool", "{\"minutes\":30}"));
 
         JSONObject json = JSON.parseObject(JSON.toJSONString(frame));
 
-        assertThat(json.getString("callId")).isEqualTo("req-1|analyze_log_errors|abc123");
-        assertThat(json.getString("tool")).isEqualTo("analyze_log_errors");
+        assertThat(json.getString("callId")).isEqualTo("req-1|demo_builtin_tool|abc123");
+        assertThat(json.getString("tool")).isEqualTo("demo_builtin_tool");
         assertThat(json.getString("arguments")).isEqualTo("{\"minutes\":30}");
         assertThat(json.getString("status")).isEqualTo("started");
         // started 帧不带耗时与错误——fastjson2 默认省略 null 字段
@@ -33,7 +33,7 @@ class ToolEventFrameTest {
     @Test
     void succeededFrame_hasDurationMs_noError() {
         ToolEventFrame frame = ToolEventFrame.from(ToolEvent.terminal(
-                "req-1|analyze_log_errors|abc123", "analyze_log_errors", "{\"minutes\":30}",
+                "req-1|demo_builtin_tool|abc123", "demo_builtin_tool", "{\"minutes\":30}",
                 true, 42L, null));
 
         JSONObject json = JSON.parseObject(JSON.toJSONString(frame));
@@ -46,7 +46,7 @@ class ToolEventFrameTest {
     @Test
     void failedFrame_hasDurationMsAndError() {
         ToolEventFrame frame = ToolEventFrame.from(ToolEvent.terminal(
-                "req-1|log_error_count|def456", "log_error_count", "{\"minutes\":15}",
+                "req-1|demo_script_tool|def456", "demo_script_tool", "{\"minutes\":15}",
                 false, 7L, "工具执行超时（3000ms）"));
 
         JSONObject json = JSON.parseObject(JSON.toJSONString(frame));

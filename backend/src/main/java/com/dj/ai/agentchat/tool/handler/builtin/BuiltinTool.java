@@ -16,7 +16,7 @@ import java.util.Map;
 public interface BuiltinTool {
 
     /**
-     * 与 handler_config.bean 对应的唯一键；首发为 {@code "analyzeLogErrors"}。
+     * 与 handler_config.bean 对应的唯一键（DB 注册行 handler_config 中引用）。
      */
     String key();
 

@@ -7,7 +7,6 @@ import com.dj.ai.agentchat.tool.callback.ToolCallbackFactory;
 import com.dj.ai.agentchat.tool.mapper.AgentToolMapper;
 import com.dj.ai.agentchat.tool.po.AgentToolPO;
 import com.dj.ai.agentchat.tool.schema.ToolSchemaInitializer;
-import com.dj.ai.agentchat.tool.schema.ToolSeeder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.dao.DataAccessException;
@@ -32,18 +31,15 @@ public class ToolRegistry {
     private final AgentToolMapper toolMapper;
     private final ToolCallbackFactory callbackFactory;
     private final ToolSchemaInitializer schemaInitializer;
-    private final ToolSeeder toolSeeder;
 
     private volatile ToolLoadSnapshot snapshot = ToolLoadSnapshot.empty();
 
     public ToolRegistry(AgentToolMapper toolMapper,
                         ToolCallbackFactory callbackFactory,
-                        ToolSchemaInitializer schemaInitializer,
-                        ToolSeeder toolSeeder) {
+                        ToolSchemaInitializer schemaInitializer) {
         this.toolMapper = toolMapper;
         this.callbackFactory = callbackFactory;
         this.schemaInitializer = schemaInitializer;
-        this.toolSeeder = toolSeeder;
     }
 
     /**
@@ -70,9 +66,8 @@ public class ToolRegistry {
 
     private ToolLoadSnapshot reload(boolean degradeOnError) {
         try {
-            // 懒建表 + 懒种子（启动 Runner 失败时，首次工具路径自愈补齐）
+            // 懒建表（启动 Runner 失败时，首次工具路径自愈）；工具行完全由管理端维护，无种子
             schemaInitializer.ensureSchema();
-            toolSeeder.seedIfAbsent();
             List<AgentToolPO> rows = toolMapper.selectList(
                     new QueryWrapper<AgentToolPO>().eq("enabled", 1).orderByAsc("id"));
             List<ToolCallback> callbacks = new ArrayList<>();

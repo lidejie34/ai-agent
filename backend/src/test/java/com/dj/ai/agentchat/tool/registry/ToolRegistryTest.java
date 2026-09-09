@@ -7,7 +7,6 @@ import com.dj.ai.agentchat.tool.callback.ToolCallbackFactory;
 import com.dj.ai.agentchat.tool.mapper.AgentToolMapper;
 import com.dj.ai.agentchat.tool.po.AgentToolPO;
 import com.dj.ai.agentchat.tool.schema.ToolSchemaInitializer;
-import com.dj.ai.agentchat.tool.schema.ToolSeeder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -33,7 +32,6 @@ class ToolRegistryTest {
     private AgentToolMapper mapper;
     private ToolCallbackFactory factory;
     private ToolSchemaInitializer initializer;
-    private ToolSeeder seeder;
     private ToolRegistry registry;
 
     @BeforeEach
@@ -41,8 +39,7 @@ class ToolRegistryTest {
         mapper = mock(AgentToolMapper.class);
         factory = mock(ToolCallbackFactory.class);
         initializer = mock(ToolSchemaInitializer.class);
-        seeder = mock(ToolSeeder.class);
-        registry = new ToolRegistry(mapper, factory, initializer, seeder);
+        registry = new ToolRegistry(mapper, factory, initializer);
     }
 
     private AgentToolPO row(long id, String name, String handlerType) {
@@ -56,8 +53,8 @@ class ToolRegistryTest {
 
     @Test
     void toolCallbacks_loadsEnabledRows_andBuildsCallbacks() {
-        AgentToolPO row1 = row(1, "analyze_log_errors", "BUILTIN");
-        AgentToolPO row2 = row(2, "log_error_count", "SCRIPT");
+        AgentToolPO row1 = row(1, "demo_builtin_tool", "BUILTIN");
+        AgentToolPO row2 = row(2, "demo_script_tool", "SCRIPT");
         when(mapper.selectList(any())).thenReturn(List.of(row1, row2));
         ToolCallback cb1 = mock(ToolCallback.class);
         ToolCallback cb2 = mock(ToolCallback.class);
@@ -67,9 +64,8 @@ class ToolRegistryTest {
         List<ToolCallback> callbacks = registry.toolCallbacks();
 
         assertThat(callbacks).containsExactly(cb1, cb2);
-        // 懒建表 + 懒种子在装载前执行
+        // 懒建表在装载前执行
         verify(initializer).ensureSchema();
-        verify(seeder).seedIfAbsent();
         // 查询条件：enabled=1，按 id 升序
         ArgumentCaptor<QueryWrapper<AgentToolPO>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
         verify(mapper).selectList(captor.capture());
@@ -89,7 +85,7 @@ class ToolRegistryTest {
 
     @Test
     void badRow_isSkippedWithWarn_otherRowsStillLoad() {
-        AgentToolPO good = row(1, "analyze_log_errors", "BUILTIN");
+        AgentToolPO good = row(1, "demo_builtin_tool", "BUILTIN");
         AgentToolPO bad = row(2, "future_tool", "HTTP");
         when(mapper.selectList(any())).thenReturn(List.of(good, bad));
         ToolCallback cb = mock(ToolCallback.class);
@@ -119,7 +115,7 @@ class ToolRegistryTest {
 
     @Test
     void refresh_success_updatesSnapshot() {
-        AgentToolPO row = row(1, "analyze_log_errors", "BUILTIN");
+        AgentToolPO row = row(1, "demo_builtin_tool", "BUILTIN");
         when(mapper.selectList(any())).thenReturn(List.of(row));
         ToolCallback cb = mock(ToolCallback.class);
         when(factory.build(row)).thenReturn(cb);

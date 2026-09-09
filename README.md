@@ -182,16 +182,19 @@ curl -X POST http://localhost:8080/api/chat \
 
 ### 工具调用与管理端（插入迭代 G）
 
-工具以 **DB 注册表**（`agent_tool` / `agent_tool_call_log` 两表，启动 best-effort 建表 + 种子内置工具）
-驱动：模型每轮对话前挂载当前启用工具，自主决定调用；执行在独立 daemon 线程池，超时/截断/脱敏统一治理，
-每次调用落审计日志。处理器两类：
+工具以 **DB 注册表**（`agent_tool` / `agent_tool_call_log` 两表，启动 best-effort 建表；
+表内不预置任何工具，工具行完全由管理端维护）驱动：模型每轮对话前挂载当前启用工具，自主决定调用；
+执行在独立 daemon 线程池，超时/截断/脱敏统一治理，每次调用落审计日志。DB 处理器两类：
 
-- **BUILTIN（内置）**：随应用发行，开箱即用。种子内置 `analyze_log_errors`（分析最近 N 分钟日志：
-  ERROR/WARN 统计、典型错误摘录，尾部窗口、扫描三上限保护）；指南文本（guide_md）可在管理端热更新，
-  写后立即对新对话生效。
+- **BUILTIN（内置）**：处理器为容器内实现 `BuiltinTool` 接口的 Spring bean，DB 行的
+  `handler_config.bean` 引用其 key；新增内置工具 = 写一个 bean + 管理端登记一行。指南文本
+  （guide_md）可在管理端热更新，写后立即对新对话生效。
 - **SCRIPT（白名单脚本）**：`app.tools.script-dir` 目录内、经管理端登记的 shell 脚本，执行器以
   `/bin/sh <file>` + argv 数组方式运行（禁 `-c`）、环境变量白名单注入、工作目录锁定、超时强杀、
-  输出截断。种子脚本 `log_error_count` **默认禁用**，需管理端启用并人工审计脚本内容后方可使用。
+  输出截断；脚本需先放入白名单目录并经人工审计，再在管理端登记启用。
+
+此外 **MCP 工具**由 `app.mcp.servers` 配置的 stdio MCP server 启动快照提供（命名规范化为
+`<server>_<tool>`），与 DB 工具合并挂载、同名时 DB 优先；详见后文「MCP 工具」一节。
 
 **SSE 工具帧**：流式问答中工具调用过程以 `event:tool` 帧推送（fastjson2 JSON）：
 `event:tool` → `data:{"callId":"<请求ID>|<工具名>|<短随机>","tool":"...","arguments":"{...}",
@@ -208,18 +211,18 @@ TOKEN='你的管理端令牌'   # 来自 APP_ADMIN_TOKEN 或 application-local.y
 curl -s http://localhost:8080/api/admin/tools -H "X-Admin-Token: $TOKEN"
 # 工具详情（含 inputSchema/handlerConfig/guideMd 全文）
 curl -s http://localhost:8080/api/admin/tools/1 -H "X-Admin-Token: $TOKEN"
-# 新增工具（BUILTIN 登记另一个内置 bean / SCRIPT 登记白名单脚本）
+# 新增工具（BUILTIN 登记容器内 bean / SCRIPT 登记白名单脚本；脚本需先放入 script-dir）
 curl -s -X POST http://localhost:8080/api/admin/tools -H "X-Admin-Token: $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"log_error_count","description":"统计日志 ERROR/WARN 行数",
+  -d '{"name":"my_script_tool","description":"工具用途一句话",
        "inputSchema":{"type":"object","properties":{"minutes":{"type":"integer"}}},
-       "handlerType":"SCRIPT","handlerConfig":{"script":"log_error_count.sh"},
+       "handlerType":"SCRIPT","handlerConfig":{"script":"my_script.sh"},
        "enabled":true,"timeoutMs":10000,"outputMaxChars":4000}'
 # 全量更新（PUT）/ 部分更新（PATCH，如热改指南、启停、改超时）
-curl -s -X PATCH http://localhost:8080/api/admin/tools/2 -H "X-Admin-Token: $TOKEN" \
+curl -s -X PATCH http://localhost:8080/api/admin/tools/1 -H "X-Admin-Token: $TOKEN" \
   -H 'Content-Type: application/json' -d '{"enabled":true}'
-# 删除
-curl -s -X DELETE http://localhost:8080/api/admin/tools/2 -H "X-Admin-Token: $TOKEN"
+# 删除（仅删注册行；历史审计日志保留）
+curl -s -X DELETE http://localhost:8080/api/admin/tools/1 -H "X-Admin-Token: $TOKEN"
 # 调用审计日志（0 基分页；可按 toolName/sessionId/status/时间区间过滤）
 curl -s 'http://localhost:8080/api/admin/tool-call-logs?page=0&size=20&status=failed' \
   -H "X-Admin-Token: $TOKEN"
@@ -522,10 +525,10 @@ backend/src/main/java/com/dj/ai/agentchat/
 ├── tool/                              # 插入迭代 G：DB 工具注册表 + 调用闭环
 │   ├── ToolProperties / AdminProperties  # app.tools.* / app.admin.* 配置绑定
 │   ├── po/ mapper/                    #   AgentToolPO / AgentToolCallLogPO + MyBatis-Plus Mapper
-│   ├── schema/                        #   ToolSchemaInitializer/Runner（best-effort 建表）+ ToolSeeder（种子内置工具）
+│   ├── schema/                        #   ToolSchemaInitializer/Runner（best-effort 建表；无种子，工具行全由管理端维护）
 │   ├── registry/                      #   ToolRegistry（volatile 快照，refresh 失败管理端 503/对话降级空集）、HandlerType
 │   ├── handler/                       #   ToolHandler 路由 + ToolExecutionContext/Result；
-│   │   ├── builtin/                   #     BuiltinTool/BuiltinToolHandler + LogAnalysisBuiltinTool（日志分析）
+│   │   ├── builtin/                   #     BuiltinTool 接口/BuiltinToolHandler（内置 bean 自行实现并登记）
 │   │   └── script/                    #     ScriptToolHandler（/bin/sh argv 数组、环境白名单、超时强杀、输出截断）
 │   ├── security/                      #   PathGuard（目录白名单 + realpath 防逃逸）、SecretRedactor（ark-/Authorization 脱敏）
 │   ├── callback/                      #   DbToolCallback（Spring AI ToolCallback 适配）、ToolCallbackFactory、SkippableToolException
@@ -563,10 +566,9 @@ backend/src/main/resources/
 │                                      #   重试/连接池/心跳/system-prompt、app.chat.memory.*、
 │                                      #   app.tools.*/app.sdd.*/app.admin.* 全部外置）
 ├── db/chat-memory-schema.sql          # chat_session / chat_message 建表脚本（CREATE TABLE IF NOT EXISTS）
-├── skills/                            # 种子内置工具指南 md（analyze_log_errors / log_error_count）
 └── application-local.yml.example      # 本地凭证模板（复制为 application-local.yml，已被 gitignore）
-backend/scripts/
-└── log_error_count.sh                 # SCRIPT 示例脚本（只读统计 ERROR/WARN；种子默认禁用，启用前人工审计）
+# SCRIPT 工具脚本目录由 app.tools.script-dir 指定（相对工作目录，默认 scripts/ 即 backend/scripts/）；
+# 脚本由使用者自行放入白名单目录、人工审计后在管理端登记，仓库不再预置示例脚本
 
 frontend/
 ├── vite.config.ts                     # Vite + vitest（jsdom）；loadEnv 读 VITE_DEV_PROXY_TARGET 配 /api proxy
@@ -649,7 +651,8 @@ frontend/
   `app.chat.memory.max-history`（`APP_CHAT_MEMORY_MAX_HISTORY`，默认 20，续接加载最近 N 条；
   落库全量不裁剪）、`app.chat.memory.init-on-startup`（`APP_CHAT_MEMORY_INIT_ON_STARTUP`，
   默认 true，启动 best-effort 建表；false 时首次记忆路径懒触发建表，DB 不可达同样自愈）。
-- **工具调用闭环（插入迭代 G）**：工具注册表在 DB（`agent_tool` 表，启动 best-effort 建表 + 种子），
+- **工具调用闭环（插入迭代 G）**：工具注册表在 DB（`agent_tool` 表，启动 best-effort 建表；不预置工具行，
+  注册内容完全由管理端 CRUD 维护），
   `ToolRegistry` 持有 volatile 快照——对话路径每次挂载读快照（DB 故障降级为零工具，不拖垮对话），
   管理端写操作后强制 `refresh()`（失败 503，保证管理端强一致）；工具在独立 daemon 线程池执行，
   调用起止经 `ToolCallBridge` 发 `event:tool` 帧（流结束后迟到的帧一律丢弃），审计 best-effort 落
