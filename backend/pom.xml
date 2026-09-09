@@ -12,10 +12,20 @@
     </parent>
 
     <groupId>com.dj.ai</groupId>
-    <artifactId>dj-agent-chat</artifactId>
+    <artifactId>dj-agent-chat-parent</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>dj-agent-chat</name>
-    <description>Spring AI + Volcengine Ark chat bootstrap</description>
+    <packaging>pom</packaging>
+    <name>dj-agent-chat-parent</name>
+    <description>Spring AI + Volcengine Ark chat —— 多模块聚合父 POM</description>
+
+    <modules>
+        <!-- 纯 Java 工具扩展点（BUILTIN 插件 SPI，零框架依赖） -->
+        <module>agentchat-tools-spi</module>
+        <!-- 工具插件聚合：以后每个 Java 工具包在 tools/ 下新增一个子模块 -->
+        <module>tools</module>
+        <!-- 可启动应用（唯一打 fat jar 的模块） -->
+        <module>agentchat-app</module>
+    </modules>
 
     <properties>
         <java.version>17</java.version>
@@ -42,152 +52,12 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- 本仓工具 SPI：插件模块与 app 统一版本 -->
+            <dependency>
+                <groupId>com.dj.ai</groupId>
+                <artifactId>dj-agent-tools-spi</artifactId>
+                <version>${project.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
-
-    <dependencies>
-        <!-- Web：Servlet MVC 栈 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-
-        <!-- Spring AI OpenAI 兼容 starter（版本严格锁定 1.0.0-M7，由 BOM 管理）。
-             构建期核验修正：M7 实际发布坐标为 spring-ai-starter-model-openai（旧名
-             spring-ai-openai-spring-boot-starter 仅存在于 M6 及更早），且 M7 已发布于
-             Maven Central（spring-milestones 仓库已清理 M6/M7）。版本未变，仍为 M7。 -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-openai</artifactId>
-        </dependency>
-
-        <!-- 迭代2：同步模型调用路径（RestClient）显式连接池——Apache HttpClient5。
-             版本由 Spring Boot 3.4.0 BOM 管理（httpclient5 5.4.1 / httpcore5 5.3.1），不写 version。 -->
-        <dependency>
-            <groupId>org.apache.httpcomponents.client5</groupId>
-            <artifactId>httpclient5</artifactId>
-        </dependency>
-
-        <!-- 迭代2：流式模型调用路径（WebClient）显式连接池——Reactor Netty。
-             spring-webflux 已由 spring-ai-retry 传递引入，但 reactor-netty 未传递
-             （缺失时 WebClient 回退 JDK HttpClient 连接器、无池），故显式声明。
-             仅加 reactor-netty-http（reactor-netty-core 由其传递）；不引 spring-boot-starter-webflux
-             （保持 Servlet MVC 栈）。版本由 Boot reactor-bom 2024.0.0 管理（reactor-netty 1.2.x）。 -->
-        <dependency>
-            <groupId>io.projectreactor.netty</groupId>
-            <artifactId>reactor-netty-http</artifactId>
-        </dependency>
-
-        <!-- 存储预留：MySQL（本期不连、不建表） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-jdbc</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
-        <!-- 存储预留：Redis（Lettuce 懒连接） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
-        </dependency>
-
-        <!-- 存储预留：Postgres（后续 pgvector/RAG） -->
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
-        <!-- 迭代3：持久层 MyBatis-Plus（Boot3 专用制品；本地仓库 3.5.5 全套离线可解析；
-             传递 mybatis-spring 3.0.3（Spring6/Boot3 适配）与 spring-boot-starter-jdbc
-             （Hikari + spring-jdbc，建表复用 ScriptUtils）。升 3.5.9+ 需在线拉取。） -->
-        <dependency>
-            <groupId>com.baomidou</groupId>
-            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
-            <version>3.5.5</version>
-        </dependency>
-
-        <!-- 迭代3：JSON 序列化/反序列化统一走 fastjson2（@RequestBody/@ResponseBody/SSE 帧）。
-             核心与扩展本地 2.0.61 离线可解析；spring6 集成制品已在线拉取入本地仓库（CI/他机需联网）。
-             Jackson 保留在转换器列表兜底，不移除。 -->
-        <dependency>
-            <groupId>com.alibaba.fastjson2</groupId>
-            <artifactId>fastjson2</artifactId>
-            <version>2.0.61</version>
-        </dependency>
-        <dependency>
-            <groupId>com.alibaba.fastjson2</groupId>
-            <artifactId>fastjson2-extension-spring6</artifactId>
-            <version>2.0.61</version>
-        </dependency>
-
-        <!-- 迭代4：MCP Client（stdio 手工装配，路径 B）。
-             mcp-core 0.14.0 + mcp-json-jackson2 0.14.0 均在离线库 ~/tc/tc_resp；
-             版本显式声明（spring-ai BOM 不管理 mcp SDK；不引 spring-ai-starter-mcp-client，
-             不用其自动注册的 SyncMcpToolCallbackProvider——MCP 工具回调全部由本工程
-             McpToolCallback 包装产生，AC-16 结构性保证）。
-             mcp-core 传递 reactor-core 3.7.0（Boot BOM 管理）/jackson/slf4j，均已离线可解析；
-             不引 spring-webflux/reactor-netty/mcp-spring-webflux，保持 Servlet MVC 栈（AC-46）。 -->
-        <dependency>
-            <groupId>io.modelcontextprotocol.sdk</groupId>
-            <artifactId>mcp-core</artifactId>
-            <version>0.14.0</version>
-        </dependency>
-        <dependency>
-            <groupId>io.modelcontextprotocol.sdk</groupId>
-            <artifactId>mcp-json-jackson2</artifactId>
-            <version>0.14.0</version>
-            <!-- 离线库 tc_resp 无 com.networknt:json-schema-validator:1.5.7 及其传递 com.ethlo.time:itu
-                 的 jar（仅 pom）；该 validator 仅用于 structuredContent 输出校验，本迭代只用
-                 TextContent 文本块，故排除并在 StdioMcpClientFactory 装配时显式传入 no-op
-                 JsonSchemaValidator（不触发 ServiceLoader 的 networknt 实现加载）。 -->
-            <exclusions>
-                <exclusion>
-                    <groupId>com.networknt</groupId>
-                    <artifactId>json-schema-validator</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <!-- 工具 -->
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <!-- 测试 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- reactor-test：Flux 流式断言（starter-test 不传递时显式补齐） -->
-        <dependency>
-            <groupId>io.projectreactor</groupId>
-            <artifactId>reactor-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <excludes>
-                        <exclude>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </exclude>
-                    </excludes>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>

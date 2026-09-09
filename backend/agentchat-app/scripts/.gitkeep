@@ -1,0 +1,2 @@
+# 此目录为 SCRIPT 工具白名单根目录（app.tools.script-dir，相对模块 CWD）。
+# shell 脚本放此登记后在管理端登记工具行；不在仓库预置工具脚本。

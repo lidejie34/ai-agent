@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.dj.ai</groupId>
+        <artifactId>dj-agent-chat-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>dj-agent-tools</artifactId>
+    <packaging>pom</packaging>
+    <name>dj-agent-tools</name>
+    <description>Java 工具插件聚合：每个工具包一个子模块</description>
+
+    <!--
+      新增一个 Java 工具包（三处触碰，无需改框架代码）：
+      1. 在本目录建 tools/&lt;tool-name&gt;/ 子模块（父 POM 指到本聚合），
+         依赖 com.dj.ai:dj-agent-tools-spi，实现 com.dj.ai.agentchat.tool.spi.BuiltinTool，
+         实现类包名置于 com.dj.ai.agentchat.tools.&lt;toolname&gt;（应用扫描根 com.dj.ai.agentchat 之内）；
+      2. 在下面登记 &lt;module&gt;tool-name&lt;/module&gt;，并在 agentchat-app/pom.xml 加该 jar 依赖；
+      3. 管理端 agent_tool 登记一行（handler_type=BUILTIN，handler_config.bean=key()）。
+      SCRIPT 工具无需建模块：脚本放入 agentchat-app/scripts/ 后管理端登记即可。
+    -->
+    <modules>
+    </modules>
+</project>

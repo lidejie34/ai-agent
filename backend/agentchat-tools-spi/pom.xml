@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.dj.ai</groupId>
+        <artifactId>dj-agent-chat-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>dj-agent-tools-spi</artifactId>
+    <name>dj-agent-tools-spi</name>
+    <description>BUILTIN 工具扩展点：BuiltinTool / ToolExecutionContext / ToolExecutionResult（纯 Java，零依赖）</description>
+
+    <!-- 刻意零依赖：SPI 只定义契约，不绑 Spring，插件模块只依赖本模块即可编译 -->
+</project>

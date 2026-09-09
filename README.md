@@ -48,6 +48,8 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
 cd backend
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
 export PATH="$JAVA_HOME/bin:$PATH"
+mvn -o install -DskipTests -q          # 首次/拉新代码后：把 SPI 等模块装进本地仓
+cd agentchat-app                       # 可启动应用在 app 子模块（多模块结构见「工程结构」）
 mvn -o spring-boot:run -Dspring-boot.run.profiles=local    # local profile 读 gitignored 的 application-local.yml（真实 Key/MySQL）
 
 # 终端 2 —— 前端
@@ -65,8 +67,10 @@ npm run dev        # http://localhost:5173
 mkdir -p logs
 cd backend
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
-nohup mvn -o spring-boot:run -Dspring-boot.run.profiles=local > ../logs/backend.log 2>&1 &
-echo $! > ../logs/backend.pid
+mvn -o install -DskipTests -q
+cd agentchat-app
+nohup mvn -o spring-boot:run -Dspring-boot.run.profiles=local > ../../logs/backend.log 2>&1 &
+echo $! > ../../logs/backend.pid
 
 # 启动前端
 cd ../frontend
@@ -96,7 +100,7 @@ kill "$(lsof -ti:5173)"   # 前端
 后端换端口启动，前端 proxy 目标用环境变量同步指向（shell 变量优先级高于 `.env.development`）：
 
 ```bash
-# 后端跑 8081（绝不 kill 别人占用 8080 的进程）
+# 后端跑 8081（绝不 kill 别人占用 8080 的进程；在 backend/agentchat-app 目录执行）
 mvn -o spring-boot:run -Dspring-boot.run.profiles=local \
   -Dspring-boot.run.arguments="--server.port=8081"
 
@@ -115,7 +119,7 @@ lsof -nP -iTCP:5173 -sTCP:LISTEN    # 查看前端监听进程
 
 ## 快速开始
 
-### 后端（在 `backend/` 目录执行）
+### 后端（多模块，根在 `backend/`）
 
 ```bash
 cd backend
@@ -126,10 +130,14 @@ export PATH="$JAVA_HOME/bin:$PATH"
 java -version    # 期望 openjdk version "17.0.x"（Temurin）
 mvn -v           # 期望 Java version: 17.0.x；若显示 1.8 说明切换失败
 
-# 2) 离线全量测试（无需 Key、无需外网、无需数据库，应全绿；594 测试）
+# 2) 离线全量测试（reactor 三模块；无需 Key、无需外网、无需数据库，应全绿；567 测试）
 mvn -o test
+#    首次/拉新代码后先把模块装进本地仓（app 单模块运行时解析 SPI 依赖需要）：
+mvn -o install -DskipTests
 
-# 3) 不启动 MySQL、不填 Key，直接启动（验证缺库缺 Key 可启动；无 Key 调对话返回 503 ARK_NOT_CONFIGURED）
+# 3) 启动只能在 app 模块目录（唯一带 spring-boot-maven-plugin 的模块）
+cd agentchat-app
+#    不启动 MySQL、不填 Key，直接启动（缺库缺 Key 可启动；无 Key 调对话返回 503 ARK_NOT_CONFIGURED）
 mvn -o spring-boot:run
 
 # 4) 填入真实凭证后重启（二选一）
@@ -137,11 +145,16 @@ mvn -o spring-boot:run
 export ARK_API_KEY="ark-你的真实Key"
 export ARK_CHAT_MODEL="doubao-seed-2-1-turbo-260628"   # 见下方「实测可用模型」
 mvn -o spring-boot:run
-#    方式 B：本地 profile（文件已被 gitignore，绝不入库）
+#    方式 B：本地 profile（文件已被 gitignore，绝不入库；路径在 app 模块下）
 cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
 #    编辑 application-local.yml 填入真实值后：
 mvn -o spring-boot:run -Dspring-boot.run.profiles=local
 ```
+
+> 多模块布局：`agentchat-tools-spi`（纯 Java 工具 SPI，零依赖）、`tools/`（Java 工具插件
+> 聚合，每包一个子模块）、`agentchat-app`（全部业务代码与唯一可启动模块）。
+> `spring-boot:run` 的 CWD 是 `backend/agentchat-app`，故默认相对路径（`scripts/`、`logs/`）
+> 都以该目录为基准。详见「工程结构」。
 
 接口自测：
 
@@ -165,7 +178,7 @@ curl -X DELETE http://localhost:8080/api/sessions/<UUID>         # 删除会话�
 ```
 
 会话持久化冒烟（需本地 MySQL 在 127.0.0.1:13306，库 `dj_agent`；表由应用启动时 best-effort
-自动建，亦可手动执行 `backend/src/main/resources/db/chat-memory-schema.sql`；无 MySQL 时应用照常启动，
+自动建，亦可手动执行 `backend/agentchat-app/src/main/resources/db/chat-memory-schema.sql`；无 MySQL 时应用照常启动，
 仅会话路径返回 503）：
 
 ```bash
@@ -195,6 +208,13 @@ curl -X POST http://localhost:8080/api/chat \
 
 此外 **MCP 工具**由 `app.mcp.servers` 配置的 stdio MCP server 启动快照提供（命名规范化为
 `<server>_<tool>`），与 DB 工具合并挂载、同名时 DB 优先；详见后文「MCP 工具」一节。
+
+**多模块与 Java 工具包**：后端为 Maven 多模块——`agentchat-tools-spi`（`BuiltinTool` 契约，
+纯 Java 零依赖）、`tools/`（工具插件聚合）、`agentchat-app`（可启动应用）。BUILTIN 工具推荐
+每包一个独立模块：在 `tools/<tool-name>/` 建模块（依赖 spi，实现类放
+`com.dj.ai.agentchat.tools.<toolname>` 包内即被组件扫描收集），`tools/pom.xml` 挂 module、
+`agentchat-app/pom.xml` 加依赖，再管理端登记一行——三处触碰，不改框架代码。SCRIPT 工具无需
+建模块。
 
 **SSE 工具帧**：流式问答中工具调用过程以 `event:tool` 帧推送（fastjson2 JSON）：
 `event:tool` → `data:{"callId":"<请求ID>|<工具名>|<短随机>","tool":"...","arguments":"{...}",
@@ -245,7 +265,7 @@ curl -s 'http://localhost:8080/api/admin/tool-call-logs?page=0&size=20&status=fa
 | `app.tools.default-timeout-ms` | — | `30000` | 表行 timeout_ms 缺省；管理端校验硬范围 1~60000ms |
 | `app.tools.default-output-max-chars` | — | `8000` | 表行 output_max_chars 缺省；硬范围 100~100000 |
 | `app.tools.redact-patterns` | — | `[]` | 增补脱敏正则（YAML 列表；启动编译，非法正则仅 WARN 跳过） |
-| `app.tools.builtin.log-dir` | `APP_TOOLS_LOG_DIR` | `logs` | 日志分析根目录（相对 CWD）。**强烈建议配绝对路径**：`mvn spring-boot:run` 的 CWD 是 `backend/`，而 nohup/IDE/jar 启动的 CWD 可能是仓库根或部署目录，相对路径会指向不同位置 |
+| `app.tools.builtin.log-dir` | `APP_TOOLS_LOG_DIR` | `logs` | 脚本工具注入的 LOG_DIR（相对 CWD）。**强烈建议配绝对路径**：`mvn spring-boot:run` 的 CWD 是 `backend/agentchat-app`，而 nohup/IDE/jar 启动的 CWD 可能是仓库根或部署目录，相对路径会指向不同位置 |
 | `app.tools.builtin.scan-max-files` | `APP_TOOLS_SCAN_MAX_FILES` | `200` | 单次扫描文件数上限 |
 | `app.tools.builtin.scan-max-bytes-per-file` | `APP_TOOLS_SCAN_MAX_BYTES` | `52428800`（50MB） | 单文件读取字节上限 |
 | `app.tools.builtin.scan-max-lines` | `APP_TOOLS_SCAN_MAX_LINES` | `200000` | 累计行数上限；触顶结果标注 truncated |
@@ -468,16 +488,22 @@ server {
 }
 ```
 
-后端服务以普通进程/systemd 启动（`java -jar backend/target/dj-agent-chat-0.0.1-SNAPSHOT.jar`，
+后端服务以普通进程/systemd 启动（`java -jar backend/agentchat-app/target/dj-agent-chat-0.0.1-SNAPSHOT.jar`，
 密钥走环境变量或 `application-local.yml`），无需对互联网暴露 8080 端口。
 
 ## 常用命令
 
 ```bash
-# 后端（cd backend 后，JDK17）
-mvn -o test                       # 离线全量测试（594 测试）
-mvn -o package -DskipTests        # 编译打包（target/dj-agent-chat-0.0.1-SNAPSHOT.jar）
-mvn dependency:resolve            # 解析依赖（Spring AI M7 从 Maven Central 获取）
+# 后端（cd backend 后，JDK17）—— 多模块 reactor
+mvn -o test                              # 全模块离线测试（567 测试）
+mvn -o install -DskipTests               # 全部模块装进本地仓（首次/拉新代码后）
+mvn -o package -DskipTests               # 编译打包（agentchat-app/target/dj-agent-chat-0.0.1-SNAPSHOT.jar）
+mvn -o -pl agentchat-app -am test        # 只测 app（-am 连带构建 spi/tools）
+mvn dependency:resolve                   # 解析依赖（Spring AI M7 从 Maven Central 获取）
+
+# 后端运行（spring-boot:run 只能在 app 模块执行；先在 backend 根 install 过一次）
+cd agentchat-app
+mvn -o spring-boot:run -Dspring-boot.run.profiles=local
 
 # 前端（cd frontend 后）
 npm run test                      # vitest run 全量单测
@@ -487,7 +513,15 @@ npm run build                     # tsc -b && vite build
 ## 工程结构
 
 ```
-backend/src/main/java/com/dj/ai/agentchat/
+backend/
+├── pom.xml                                # 聚合父 POM（packaging=pom；spring-ai BOM、三模块）
+├── agentchat-tools-spi/                   # 纯 Java 工具 SPI（零依赖 jar）
+│   └── src/main/java/com/dj/ai/agentchat/tool/spi/
+│                                          #   BuiltinTool 扩展点 + ToolExecutionContext/Result
+├── tools/                                 # Java 工具插件聚合（packaging=pom；新增工具包在此挂子模块）
+└── agentchat-app/                         # 可启动应用（全部业务代码 + 唯一 boot 插件模块）
+    ├── scripts/                           # SCRIPT 工具白名单目录（app.tools.script-dir，相对模块 CWD）
+    └── src/main/java/com/dj/ai/agentchat/
 ├── DjAgentChatApplication.java        # 启动类
 ├── controller/
 │   ├── ChatController.java            # POST /api/chat、/api/chat/stream（SSE 编排 + 心跳）
@@ -527,8 +561,8 @@ backend/src/main/java/com/dj/ai/agentchat/
 │   ├── po/ mapper/                    #   AgentToolPO / AgentToolCallLogPO + MyBatis-Plus Mapper
 │   ├── schema/                        #   ToolSchemaInitializer/Runner（best-effort 建表；无种子，工具行全由管理端维护）
 │   ├── registry/                      #   ToolRegistry（volatile 快照，refresh 失败管理端 503/对话降级空集）、HandlerType
-│   ├── handler/                       #   ToolHandler 路由 + ToolExecutionContext/Result；
-│   │   ├── builtin/                   #     BuiltinTool 接口/BuiltinToolHandler（内置 bean 自行实现并登记）
+│   ├── handler/                       #   ToolHandler 路由（执行上下文/结果 SPI 已移至 agentchat-tools-spi）；
+│   │   ├── builtin/                   #     BuiltinToolHandler（收集容器内所有 BuiltinTool bean，按 key() 路由）
 │   │   └── script/                    #     ScriptToolHandler（/bin/sh argv 数组、环境白名单、超时强杀、输出截断）
 │   ├── security/                      #   PathGuard（目录白名单 + realpath 防逃逸）、SecretRedactor（ark-/Authorization 脱敏）
 │   ├── callback/                      #   DbToolCallback（Spring AI ToolCallback 适配）、ToolCallbackFactory、SkippableToolException
@@ -561,14 +595,14 @@ backend/src/main/java/com/dj/ai/agentchat/
                                        # InvalidChatRequestException / MemoryUnavailableException(503) /
                                        # SessionNotFoundException(404) / ToolNotFoundException(404) /
                                        # ToolsUnavailableException(503) / GlobalExceptionHandler
-backend/src/main/resources/
+agentchat-app/src/main/resources/
 ├── application.yml                    # 入库配置（密钥占位、三套存储连接、Hikari 懒启动、
 │                                      #   重试/连接池/心跳/system-prompt、app.chat.memory.*、
 │                                      #   app.tools.*/app.sdd.*/app.admin.* 全部外置）
 ├── db/chat-memory-schema.sql          # chat_session / chat_message 建表脚本（CREATE TABLE IF NOT EXISTS）
 └── application-local.yml.example      # 本地凭证模板（复制为 application-local.yml，已被 gitignore）
-# SCRIPT 工具脚本目录由 app.tools.script-dir 指定（相对工作目录，默认 scripts/ 即 backend/scripts/）；
-# 脚本由使用者自行放入白名单目录、人工审计后在管理端登记，仓库不再预置示例脚本
+# SCRIPT 工具脚本目录由 app.tools.script-dir 指定（相对模块 CWD，默认 scripts/ 即 agentchat-app/scripts/）；
+# 脚本由使用者自行放入白名单目录、人工审计后在管理端登记，仓库不预置工具脚本
 
 frontend/
 ├── vite.config.ts                     # Vite + vitest（jsdom）；loadEnv 读 VITE_DEV_PROXY_TARGET 配 /api proxy
