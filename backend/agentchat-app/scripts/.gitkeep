@@ -1,2 +1,3 @@
-# 此目录为 SCRIPT 工具白名单根目录（app.tools.script-dir，相对模块 CWD）。
-# shell 脚本放此登记后在管理端登记工具行；不在仓库预置工具脚本。
+# 此目录为 SCRIPT 工具白名单根目录（app.tools.script-dir，默认相对模块 CWD）。
+# 脚本放入此目录后还需在管理端登记工具行才能挂载。
+# 注意：脚本内含本机绝对路径（node、skyeye.ts），换机使用需修改或外置配置。
