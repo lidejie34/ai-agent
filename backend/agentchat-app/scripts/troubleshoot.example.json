@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "_comment": "排障三件套配置模板。复制到 ~/.ai-agent/troubleshoot/config.json 后按本机修改：code_root 必须是本机真实检出路径；密码不写在这里，写 dbs.env。日志环境白名单 logEnvs 不含 stage（本工具禁止查 stage 日志）；查库仅 QA。",
+  "logEnvs": ["qa", "uat", "product"],
+  "dbEnv": "qa",
+  "skyeye": {
+    "tsEntry": "/Users/lidejie/.agents/skills/skyeye/scripts/skyeye.ts",
+    "nodeBin": "/opt/homebrew/bin/node"
+  },
+  "mysql": {
+    "dockerBin": "/usr/local/bin/docker",
+    "container": "db-mysql-1"
+  },
+  "databases": {
+    "TETitcDRP-qa": {
+      "display_name": "DRP QA 库",
+      "host": "cn-east.database-mysql.qa.cdb.17usoft.com",
+      "port": 22344,
+      "user": "TETitcDRP",
+      "database": "TETitcDRP",
+      "passwordEnv": "TETITCDRP_QA_PWD",
+      "readonly": true
+    },
+    "TETitcDrpOrder-qa": {
+      "display_name": "DRP Order QA 库",
+      "host": "database-mysql-qa.cdb.17usoft.com",
+      "port": 3161,
+      "user": "TETDOrder_Single",
+      "database": "TETitcDrpOrder",
+      "passwordEnv": "TETDORDER_QA_PWD",
+      "readonly": true
+    }
+  },
+  "uks": {
+    "titc.java.drp.switch": {
+      "display_name": "OTA渠道入口（drp-restapi-switch）",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-restapi/drp-restapi-switch",
+      "related_uks": ["titc.java.dsf.drp.order", "titc.java.dsf.drp"]
+    },
+    "titc.java.drp.openapi": {
+      "display_name": "OTA渠道入口（drp-restapi-open）",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-restapi/drp-restapi-open",
+      "related_uks": ["titc.java.dsf.drp.order", "titc.java.dsf.drp"]
+    },
+    "titc.java.dsf.drp.order": {
+      "display_name": "dsf.drp.order",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-order/drp-order-dsf",
+      "database": "TETitcDrpOrder-qa",
+      "related_uks": [
+        "titc.java.dsf.drp",
+        "titc.java.drp.job",
+        "titc.java.drp.order.job",
+        "titc.java.dubbo.pms.order",
+        "titc.java.pms.bridge.order"
+      ]
+    },
+    "titc.java.drp.order.job": {
+      "display_name": "drp.order.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-order/drp-order-job",
+      "database": "TETitcDrpOrder-qa",
+      "related_uks": ["titc.java.dsf.drp.order"]
+    },
+    "titc.java.dsf.drp": {
+      "display_name": "drp.dsf",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp/drp-dsf",
+      "database": "TETitcDRP-qa",
+      "related_uks": ["titc.java.drp.job", "titc.java.pms.bridge.data"]
+    },
+    "titc.java.drp.ms": {
+      "display_name": "drp.ms",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp/drp-ms",
+      "database": "TETitcDRP-qa",
+      "related_uks": ["titc.java.drp.job", "titc.java.pms.bridge.data"]
+    },
+    "titc.java.drp.job": {
+      "display_name": "drp.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp/drp-job",
+      "database": "TETitcDRP-qa",
+      "related_uks": [
+        "titc.java.drp.cloud.pms.pull.job",
+        "titc.java.drp.alitrip.push.job",
+        "titc.java.drp.ctrip.push.job",
+        "titc.java.drp.douyin.push.job",
+        "titc.java.drp.jd.push.job",
+        "titc.java.drp.meituan.push.job",
+        "titc.java.drp.standard.push.job",
+        "titc.java.drp.te.push.job",
+        "titc.java.pms.bridge.data"
+      ]
+    },
+    "titc.java.drp.workbench.gateway": {
+      "display_name": "drp.workbench.gateway",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp/drp-workbench-gateway",
+      "database": "TETitcDRP-qa",
+      "related_uks": ["titc.java.drp.ms", "titc.java.drp.job"]
+    },
+    "digaiempower.java.drp.ihotel.ms": {
+      "display_name": "ihotel.ms",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp/drp-ihotel-pms",
+      "database": "TETitcDRP-qa",
+      "related_uks": ["titc.java.drp.job"]
+    },
+    "digaiempower.dsf.java.dsf.drp.pms": {
+      "display_name": "drp.pms.dsf",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp/drp-pms-dsf",
+      "database": "TETitcDRP-qa",
+      "related_uks": ["titc.java.dsf.drp", "titc.java.drp.job"]
+    },
+    "digaiempower.dsf.java.dsf.drp.external": {
+      "display_name": "drp.dsf.external",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp/drp-dsf-external",
+      "database": "TETitcDRP-qa",
+      "related_uks": ["titc.java.dsf.drp", "titc.java.drp.job"]
+    },
+    "titc.java.drp.cloud.pms.pull.job": {
+      "display_name": "cloud.pms.pull.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-pull/drp-cloud-pms-pull-job",
+      "database": "TETitcDRP-qa",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.drp.alitrip.push.job": {
+      "display_name": "alitrip.push.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-push/drp-alitrip-push-job",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.drp.ctrip.push.job": {
+      "display_name": "ctrip.push.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-push/drp-ctrip-push-job",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.drp.douyin.push.job": {
+      "display_name": "douyin.push.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-push/drp-douyin-push-job",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.drp.jd.push.job": {
+      "display_name": "jd.push.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-push/drp-jd-push-job",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.drp.meituan.push.job": {
+      "display_name": "meituan.push.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-push/drp-meituan-push-job",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.drp.standard.push.job": {
+      "display_name": "standard.push.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-push/drp-standard-push-job",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.drp.te.push.job": {
+      "display_name": "te.push.job",
+      "code_root": "/Users/lidejie/tc/lvzhi/drp-push/drp-te-push-job",
+      "related_uks": ["titc.java.dsf.drp"]
+    },
+    "titc.java.pms.push.job": {
+      "display_name": "pms.push.job（开放平台）",
+      "code_root": "/Users/lidejie/tc/lvzhi/pms-push/pms-push-job",
+      "related_uks": ["titc.java.supplier.openapi", "titc.java.dubbo.pms.order"]
+    },
+    "titc.java.supplier.openapi": {
+      "display_name": "supplier.openapi",
+      "code_root": "/Users/lidejie/tc/lvzhi/openapi/supplier-openapi",
+      "related_uks": []
+    },
+    "titc.java.pms.openapi": {
+      "display_name": "pms.openapi",
+      "code_root": "/Users/lidejie/tc/lvzhi/openapi/pms-openapi",
+      "related_uks": [
+        "titc.java.dubbo.pms.order",
+        "titc.java.pms.bridge.order",
+        "titc.java.pms.bridge.data"
+      ]
+    },
+    "titc.java.pms.openapi.switch": {
+      "display_name": "pms.openapi.switch（开放平台开关）",
+      "code_root": "/Users/lidejie/tc/lvzhi/pms-openapi-switch",
+      "code_include": ["pms-openapi-switch/**", "openapi-switch-com/**"],
+      "related_uks": ["titc.java.dubbo.pms.order", "titc.java.dubbo.pms.account"]
+    },
+    "titc.java.dubbo.pms.order": {
+      "display_name": "dubbo.pms.order",
+      "code_root": "/Users/lidejie/tc/lvzhi/pms-order/pms-order-dubbo-provider",
+      "related_uks": ["titc.java.dubbo.pms.account", "titc.java.dubbo.core.data"]
+    },
+    "titc.java.dubbo.core.data": {
+      "display_name": "dubbo.core.data (cdm 核心基础数据)",
+      "_note": "appUk 与仓名无字面关系，勿按 cdm 猜；业务逻辑在 cdm-mediator/cdm-biz，dubbo-provider 只是启动壳",
+      "code_root": "/Users/lidejie/tc/lvzhi/cdm",
+      "code_include": ["cdm-dubbo-provider/**", "cdm-mediator/**", "cdm-biz/**", "cdm-dal/**"],
+      "related_uks": ["titc.java.dubbo.pms.order"]
+    },
+    "titc.java.core.data.job": {
+      "display_name": "core.data.job (cdm job)",
+      "code_root": "/Users/lidejie/tc/lvzhi/cdm",
+      "code_include": ["cdm-job/**", "cdm-mediator/**", "cdm-biz/**", "cdm-dal/**"],
+      "related_uks": ["titc.java.dubbo.core.data"]
+    },
+    "titc.java.dubbo.pms.account": {
+      "display_name": "dubbo.pms.account",
+      "code_root": "/Users/lidejie/tc/lvzhi/pms-account/pms-account-dubbo-provider",
+      "related_uks": []
+    },
+    "titc.java.pms.bridge.order": {
+      "display_name": "pms.bridge.order",
+      "code_root": "/Users/lidejie/tc/lvzhi/pms-bridge/pms-bridge-order",
+      "related_uks": []
+    },
+    "titc.java.pms.bridge.data": {
+      "display_name": "pms.bridge.data",
+      "code_root": "/Users/lidejie/tc/lvzhi/pms-bridge/pms-bridge-data",
+      "related_uks": []
+    }
+  }
+}

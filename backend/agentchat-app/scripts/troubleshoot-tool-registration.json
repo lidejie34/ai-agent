@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "note": "迭代7 排障三件套交付登记清单。tools[].body 即管理端 ToolUpsertRequest（fastjson2 record，null 字段省略）；guideMd 的 {$guideFile} 占位在登记时替换为 scripts/guides/ 下对应文件全文。skyeye_query_log 为既有行 PATCH（id 以实际 /api/admin/tools 查询为准），其余两件 POST 新建。登记后可在管理端工具页核对，勿手工 INSERT。",
+  "tools": [
+    {
+      "action": "PATCH",
+      "name": "skyeye_query_log",
+      "body": {
+        "name": "skyeye_query_log",
+        "description": "查询 SkyEye 应用日志（首查单 uk 模糊检索→contextId→expand=1 精查 uk 组）。仅 qa/uat/product；简称自动解析，歧义会返回候选需向用户确认。",
+        "handlerType": "SCRIPT",
+        "handlerConfig": { "script": "skyeye_query_log.sh" },
+        "timeoutMs": 60000,
+        "outputMaxChars": 30000,
+        "enabled": true,
+        "guideMd": { "$guideFile": "guides/skyeye-query-guide.md" },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uk": {
+              "type": "string",
+              "description": "应用简称或完整 appUk（如 drp.switch）。与 appUks 二选一，推荐用本参数：工具自动解析简称；返回 UK_AMBIGUOUS 时须把 candidates 给用户选择，不要自行猜测。"
+            },
+            "appUks": {
+              "type": "string",
+              "description": "旧协议：完整 appUk 逗号分隔，原样透传不做简称解析。新对话请用 uk。"
+            },
+            "env": { "type": "string", "enum": ["qa", "uat", "product"], "description": "环境白名单，stage 不可查；生产只查日志不查库。" },
+            "minutes": { "type": "integer", "minimum": 1, "maximum": 1440, "description": "相对时间窗（分钟），与 begin/end 二选一。" },
+            "begin": { "type": "string", "description": "起始时间 YYYY-MM-DD HH:mm:ss.SSS，必须与 end 成对。" },
+            "end": { "type": "string", "description": "结束时间 YYYY-MM-DD HH:mm:ss.SSS，必须与 begin 成对。" },
+            "indexContext": { "type": "string", "description": "模糊检索文本（traceId/orderId/异常文案/业务号），首查使用；与 contextId 二选一。" },
+            "contextId": { "type": "string", "description": "链路 ID 精查；用户明确给出或首查派生后使用。expand=1 时必填。" },
+            "expand": { "type": "integer", "enum": [1], "description": "=1 精查扩圈：起始 uk + 无向 1 跳邻居一次性下发；必须配合 contextId，首查严禁带。" },
+            "priority": { "type": "string", "enum": ["INFO", "WARN", "ERROR"] },
+            "pageSize": { "type": "integer", "minimum": 1, "maximum": 50, "description": "默认 5；indexContext 用 5-20，contextId 精查建议 50。" }
+          },
+          "required": ["env"]
+        }
+      }
+    },
+    {
+      "action": "POST",
+      "name": "code_lookup",
+      "body": {
+        "name": "code_lookup",
+        "description": "在 uk 对应的本机业务仓内只读定位代码：FQCN+行号取上下文（含方法签名/git HEAD），或 grep -rnF 固定字符串。仓不可读返回 CODE_ROOT_UNREADABLE（非致命）。",
+        "handlerType": "SCRIPT",
+        "handlerConfig": { "script": "code_lookup.sh" },
+        "timeoutMs": 15000,
+        "outputMaxChars": 30000,
+        "enabled": true,
+        "guideMd": { "$guideFile": "guides/code-lookup-guide.md" },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uk": { "type": "string", "description": "应用简称或完整 appUk，决定 code_root/code_include。" },
+            "mode": { "type": "string", "enum": ["fqcn", "grep"], "description": "fqcn=按完整类名（+行号）定位；grep=固定字符串检索。" },
+            "fqcn": { "type": "string", "description": "mode=fqcn 必填：完整包名.类名，可附行号如 com.ly.xxx.OrderHandler:122。" },
+            "line": { "type": "integer", "minimum": 1, "maximum": 99999, "description": "目标行号（也可直接写在 fqcn 的 :行号 里）。" },
+            "pattern": { "type": "string", "maxLength": 200, "description": "mode=grep 必填：固定字符串（异常类名/日志文案/错误码），非正则。" },
+            "context": { "type": "integer", "minimum": 1, "maximum": 80, "description": "目标行上下行数，默认 40。" }
+          },
+          "required": ["uk", "mode"]
+        }
+      }
+    },
+    {
+      "action": "POST",
+      "name": "qa_db_query",
+      "body": {
+        "name": "qa_db_query",
+        "description": "QA 只读库受限 SELECT（经本机 docker mysql 通道），用于日志结论的数据侧交叉验证。仅简单等值条件，写操作/多语句/函数在工具层硬拦截。",
+        "handlerType": "SCRIPT",
+        "handlerConfig": { "script": "qa_db_query.sh" },
+        "timeoutMs": 30000,
+        "outputMaxChars": 20000,
+        "enabled": true,
+        "guideMd": { "$guideFile": "guides/qa-db-query-guide.md" },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "db": {
+              "type": "string",
+              "enum": ["TETitcDRP-qa", "TETitcDrpOrder-qa"],
+              "description": "TETitcDRP-qa=DRP 主库；TETitcDrpOrder-qa=订单库。只有 QA，没有 product/uat 库。"
+            },
+            "table": { "type": "string", "description": "单表名（标识符），不支持 join/子查询。" },
+            "fields": { "type": "string", "description": "默认 *；逗号分隔列名，不接受表达式/函数。" },
+            "where": { "type": "string", "maxLength": 200, "description": "简单条件：等值/范围/AND/OR/LIKE/IN；禁止写动词、UNION、分号、注释、SLEEP、information_schema。" },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "默认 20，硬上限 50。" }
+          },
+          "required": ["db", "table"]
+        }
+      }
+    }
+  ]
+}

@@ -19,6 +19,13 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
   「参考资料：文件名」，无命中静默按原请求放行，Ollama/PG 故障降级为普通对话（不阻断）；
   管理控制台「知识库」Tab 支持上传/列表/删除（级联）/重建索引/健康查看；关闭时 RAG bean
   全家桶不装配，`/api/admin/kb/**` 返回 503 `KB_DISABLED`，行为与迭代 5 逐字节一致。
+- 迭代 7 起内置 **对话内日志×代码×QA 库联合排障三件套**（SCRIPT 工具，零 Java 改动）：
+  `skyeye_query_log`（SkyEye 日志两阶段查询：单 uk 模糊首查 → contextId → 1 跳邻居组精查；
+  env 白名单 qa/uat/product，简称自动解析/歧义回问，429/登录态/坏 uk 错误分类）、
+  `code_lookup`（按 uk 映射到外部业务仓，FQCN+行号取上下文或 `grep -rnF`，只读 + 路径 canonical 闸门）、
+  `qa_db_query`（经本机 docker 容器 mysql 客户端查 QA 两个只读库，SELECT 词法闸门 + 标识符白名单 +
+  LIMIT 硬顶，密码在仓库外 dbs.env）。环境差异全部外置到 `~/.ai-agent/troubleshoot/config.json`，
+  仓内只带脱敏模板，团队化时每人复制后按本机路径/凭据修改。
 - `frontend/`：Vite + React 18 + TypeScript + antd 5 对话页，fetch 手写 SSE 分帧消费流式接口，
   会话侧边栏（列表/切换/重命名/删除）、Markdown 渲染、停止生成、草稿与刷新恢复；
   工具调用在助手气泡内显示为「🔧 调用工具 xxx」折叠块（进行中转圈/成功耗时/失败错误摘要），
@@ -504,6 +511,55 @@ http://localhost:11434，离线可用）+ PostgreSQL 16/pgvector（docker `db-po
 | `app.rag.upload.allowed-ext` | `RAG_UPLOAD_ALLOWED_EXT` | `md,markdown,txt` | 扩展名白名单（小写无点） |
 | `app.rag.upload.max-chunks` | `RAG_UPLOAD_MAX_CHUNKS` | `2000` | 单文档切片硬顶，超限 400 提示拆分 |
 
+### 排障三件套（迭代7：SkyEye 日志 × 外部代码 × QA 只读库）
+
+在对话里完成「SkyEye 日志 → 外部业务代码定位 → QA 库数据旁证」整条排障链路，全部走 SCRIPT
+处理器（`/bin/sh scripts/<name>.sh --k v`，净化环境无 HOME、argv ≤10、值 ≤200 字符），
+**Java/前端零改动**。脚本与本章节是一体的；登记行（名称、input_schema、guide_md）仍由管理端
+DB 注册表唯一维护，仓库不内置 SQL/种子行。
+
+**本机初始化（一次性）**
+
+```bash
+# 前置：/opt/homebrew/bin/node（脚本头写死；≥20 支持 --experimental-strip-types）、
+#       skyeye 已 auth login、Docker Desktop 在跑（db-mysql-1 容器提供 mysql 客户端）、
+#       config 里 29 个 uk 的 code_root 已在本机检出
+mkdir -p ~/.ai-agent/troubleshoot
+cp backend/agentchat-app/scripts/troubleshoot.example.json ~/.ai-agent/troubleshoot/config.json
+cp backend/agentchat-app/scripts/dbs.example.env        ~/.ai-agent/troubleshoot/dbs.env
+chmod 600 ~/.ai-agent/troubleshoot/dbs.env
+# 然后手工编辑：
+#   config.json —— code_root 改成本机实际检出路径（模板里是作者本机路径）
+#   dbs.env     —— 两个 QA 只读账号密码（来源 ~/.cursor/mcp.json；文件在仓库外，勿提交勿回显）
+```
+
+脚本用 `os.homedir()` 定位配置（不依赖被净化的 HOME）；缺 config/dbs.env 时返回
+`CONFIG_MISSING`/`DBS_MISSING` 并带复制模板的中文提示。
+
+**三件套总览**（详细契约见 `scripts/troubleshoot-tool-registration.json`；模型指南母版在
+`scripts/guides/*.md`，登记时把对应文件全文写入 guide_md）
+
+| 工具 | 关键入参 | 超时 | 边界 |
+|---|---|---|---|
+| `skyeye_query_log`（既有行 PATCH） | uk/appUks、env(qa/uat/product)、minutes 或 begin+end、indexContext/contextId、expand=1、pageSize | 60s | 未声明 argv 直接拒（CLI 会静默丢参造假空）；错误分类 AUTH_EXPIRED/RATE_LIMITED/BAD_UK/UK_SET_TOO_LARGE/EMPTY |
+| `code_lookup` | uk、mode(fqcn/grep)、fqcn[:line]、pattern、context(≤80) | 15s | 只读；命中路径全过 realpath canonical 闸门；仓不可读 CODE_ROOT_UNREADABLE 非致命 |
+| `qa_db_query` | db(仅两个 QA 键)、table、fields、where(≤200)、limit(≤50) | 30s | 只能 SELECT；写动词/UNION/SLEEP/分号/注释/information_schema 词法拦截；密码只经 MYSQL_PWD 注入 |
+
+登记动作（冒烟时执行一次；X-Admin-Token 按 app.admin.token）：PATCH skyeye 既有行的
+input_schema/guide_md/描述，POST 新增 code_lookup、qa_db_query；请求体以登记清单为蓝本，
+把其中 `{"$guideFile":"guides/xxx.md"}` 替换为指南全文。清单文件只做交付凭证，**不是**自动导入
+（坚持「工具注册表完全由管理端维护」的既有设计）。
+
+**安全边界与非目标**：不碰 stage 日志、没有 product 库连接；代码与库都是只读；不做写操作、
+部署、配置修改；凭据不进仓不回显；工具不替用户在歧义 uk 中做选择。
+
+**脚本单测**（node:test 原生 runner，零 npm 依赖，离线）：
+
+```bash
+cd backend/agentchat-app/scripts
+/opt/homebrew/bin/node --test troubleshoot-lib/test/*.test.mjs   # 114 例：配置/uk/安全闸门/argv/错误分类 + 三 runner
+```
+
 ### 前端（在 `frontend/` 目录执行）
 
 ```bash
@@ -671,7 +727,9 @@ agentchat-app/src/main/resources/
 ├── db/chat-memory-schema.sql          # chat_session / chat_message 建表脚本（CREATE TABLE IF NOT EXISTS）
 └── application-local.yml.example      # 本地凭证模板（复制为 application-local.yml，已被 gitignore）
 # SCRIPT 工具脚本目录由 app.tools.script-dir 指定（相对模块 CWD，默认 scripts/ 即 agentchat-app/scripts/）；
-# 脚本由使用者自行放入白名单目录、人工审计后在管理端登记，仓库不预置工具脚本
+# 迭代7 起随仓内置排障三件套（skyeye_query_log / code_lookup / qa_db_query 的 .sh+.mjs，
+# 纯函数库在 troubleshoot-lib/，模型指南在 guides/，脱敏模板 troubleshoot.example.json/dbs.example.env，
+# 登记清单 troubleshoot-tool-registration.json）；新增自定义脚本仍须人工审计后在管理端登记
 
 frontend/
 ├── vite.config.ts                     # Vite + vitest（jsdom）；loadEnv 读 VITE_DEV_PROXY_TARGET 配 /api proxy
