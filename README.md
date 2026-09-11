@@ -13,6 +13,12 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
   先路由（直答 / 拆解计划），Executor 顺序执行子任务（共享工具挂载），Planner 再规划循环
   直至汇总收尾；过程以 `event:plan` / `event:task` SSE 帧实时回传，审计落
   `agent_orchestration_run` 表；关闭时编排 bean 全家桶不装配，行为与迭代 4 逐字节一致。
+- 迭代 6 起内置 **RAG 知识库**（`app.rag.enabled=true` 开启，默认关闭）：管理端上传
+  Markdown/TXT，本机 Ollama bge-m3 向量化（1024 维）入 PostgreSQL/pgvector 全局单库；
+  每轮对话（同步/SSE）与 SDD Executor 执行任务均由**常驻 Advisor** 先检索后增强，答案附
+  「参考资料：文件名」，无命中静默按原请求放行，Ollama/PG 故障降级为普通对话（不阻断）；
+  管理控制台「知识库」Tab 支持上传/列表/删除（级联）/重建索引/健康查看；关闭时 RAG bean
+  全家桶不装配，`/api/admin/kb/**` 返回 503 `KB_DISABLED`，行为与迭代 5 逐字节一致。
 - `frontend/`：Vite + React 18 + TypeScript + antd 5 对话页，fetch 手写 SSE 分帧消费流式接口，
   会话侧边栏（列表/切换/重命名/删除）、Markdown 渲染、停止生成、草稿与刷新恢复；
   工具调用在助手气泡内显示为「🔧 调用工具 xxx」折叠块（进行中转圈/成功耗时/失败错误摘要），
@@ -35,6 +41,10 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
 - 前端：Node 18+（推荐 20/22）、npm 10+。
 - 本地 MySQL（会话持久化需要）：docker 容器 `db-mysql-1`，宿主机端口 `127.0.0.1:13306`，
   库 `dj_agent`（表由应用启动 best-effort 自动建）；MySQL/Key 缺失时应用仍可启动，仅相关功能降级。
+- RAG 知识库（可选，默认关闭，开启 `app.rag.enabled=true` 才需要）：本机 **Ollama**
+  （`ollama pull bge-m3`，默认 11434）+ PostgreSQL 16/pgvector（docker 容器 `db-postgres-1`，
+  宿主端口 `127.0.0.1:15432`，库 `ai_vector`；扩展与表首次访问时 best-effort 自动建）。
+  两者缺失均不阻断应用启动，仅健康检查报红与 RAG 功能降级，对话照常。
 
 ## 启动与停止（本地开发速查）
 
@@ -130,7 +140,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 java -version    # 期望 openjdk version "17.0.x"（Temurin）
 mvn -v           # 期望 Java version: 17.0.x；若显示 1.8 说明切换失败
 
-# 2) 离线全量测试（reactor 三模块；无需 Key、无需外网、无需数据库，应全绿；567 测试）
+# 2) 离线全量测试（reactor 三模块；无需 Key、无需外网、无需数据库，应全绿；699 测试）
 mvn -o test
 #    首次/拉新代码后先把模块装进本地仓（app 单模块运行时解析 SPI 依赖需要）：
 mvn -o install -DskipTests
@@ -436,6 +446,64 @@ skipped 灰色「已跳过」）。
 > 真实方舟环境的端到端冒烟（路由直答/计划多任务/工具挂载/再规划跳过/各熔断/汇总/审计行/
 > 前端面板推进）需在线执行；离线单测以 mock ChatClient 覆盖全状态机（后端 99 个编排相关测试）。
 
+### RAG 知识库（迭代6：全局单库 + 常驻检索增强）
+
+**默认关闭**（`app.rag.enabled=false`）：关闭时 RAG 全家桶（PG 第二数据源/连接池、Ollama
+客户端、Advisor、管理端 service）一律不装配，`/api/admin/kb/**` 被拦截器直接挡为
+503 `KB_DISABLED`，对话链路与迭代5 逐字节一致。开启后，管理端上传 Markdown/TXT，
+经本机 Ollama **bge-m3**（1024 维）向量化存入 PostgreSQL **pgvector**，每轮普通对话
+（同步/SSE）及 SDD Executor 执行任务时，都由**常驻 Advisor**（非模型工具）先检索再增强；
+Planner/Synth 不检索。全局单库，无多知识库/无 ACL。
+
+**链路**：`上传 .md/.txt（≤10MB，UTF-8）→ 标题感知切片（默认 500 字/80 重叠）→ bge-m3
+分批 embedding → rag_document/rag_chunk 落库`；对话时 `问题 embedding → 余弦 top-k →
+≥0.45 阈值过滤 → 片段注入 userText + 引用规则注入 system`。模型必须**只依据资料作答**，
+答案末尾给出「参考资料：文件名」（去重）；无命中或 Ollama/PG 故障时**静默降级为普通对话**
+（WARN 日志，不阻断、不虚构引用）。
+
+**同名覆盖**：重复上传同名文件走「删旧文档（级联片段）→ 新建」事务，片段不双份。
+管理端「重建索引」用已存原文重新切片/向量化（失败置 FAILED，可再试）。
+
+**管理端接口**（均需 `X-Admin-Token`，路径闸门与工具开关互不影响）：
+
+```bash
+# 健康检查（仅人工刷新时探测，无轮询）：Ollama/PG 分项状态 + 文档/切片计数
+curl -s -H "X-Admin-Token: $TOK" http://localhost:8080/api/admin/kb/health
+# {"enabled":true,"ollamaOk":true,"pgOk":true,"documentCount":1,"chunkCount":1,"dimensions":1024}
+
+# 上传（multipart 字段名 file；201 READY；.pdf 等 → 400 KB_INVALID_FILE，>10MB → 400 KB_FILE_TOO_LARGE）
+curl -s -H "X-Admin-Token: $TOK" -F "file=@差旅报销制度.md;type=text/markdown" \
+  http://localhost:8080/api/admin/kb/documents
+
+curl -s -H "X-Admin-Token: $TOK" http://localhost:8080/api/admin/kb/documents            # 列表（不含原文）
+curl -s -X POST -H "X-Admin-Token: $TOK" http://localhost:8080/api/admin/kb/documents/1/reindex  # 重建
+curl -s -X DELETE -H "X-Admin-Token: $TOK" http://localhost:8080/api/admin/kb/documents/1 -w '%{http_code}'  # 204 级联
+```
+
+**前端**：管理控制台第 4 个 Tab「知识库」——健康 Alert（Ollama/PG 徽标 + 计数，手动刷新不轮询）、
+上传（仅接受 .md/.markdown/.txt）、文档表格（文件名/大小/切片数/状态 Tag/错误 tooltip/
+更新时间/重建索引/删除二次确认）；对话页零改动。
+
+**依赖服务**（仅开关开启时需要）：本机 Ollama（`ollama pull bge-m3`，默认
+http://localhost:11434，离线可用）+ PostgreSQL 16/pgvector（docker `db-postgres-1`
+宿主端口 15432，库 `ai_vector`；扩展与两表首次访问时 best-effort 自动创建）。两者不可达
+均不阻断应用启动（Hikari 懒连接），只在健康检查与功能降级中体现。
+
+**配置项**（均在 `application.yml` 外置，密钥不新增）：
+
+| 配置项 | 环境变量 | 默认 | 说明 |
+|---|---|---|---|
+| `app.rag.enabled` | `APP_RAG_ENABLED` | `false` | 总开关；false 时 RAG bean/PG 池/Ollama 客户端均不装配，对话=迭代5 |
+| `app.rag.datasource.*` | `RAG_DB_URL/USER/PASSWORD` | `127.0.0.1:15432/ai_vector` | RAG 专用第二数据源（PG），MySQL 仍是 @Primary |
+| `app.rag.ollama.base-url` | `RAG_OLLAMA_BASE_URL` | `http://localhost:11434` | 本机 Ollama（OpenAI 兼容 /v1/embeddings） |
+| `app.rag.ollama.model` | `RAG_OLLAMA_MODEL` | `bge-m3` | embedding 模型（固定 1024 维，换模型需重建表） |
+| `app.rag.ollama.timeout-ms` | `RAG_OLLAMA_TIMEOUT_MS` | `10000` | embedding 连接/读超时；超时即降级 |
+| `app.rag.chunk.max-chars/overlap` | `RAG_CHUNK_MAX_CHARS/OVERLAP` | `500/80` | 切片大小与相邻重叠；`heading-aware=true` 先按 #{1,3} 切段 |
+| `app.rag.retrieve.top-k/min-score` | `RAG_RETRIEVE_TOP_K/MIN_SCORE` | `4/0.45` | 余弦候选数与注入阈值（实测相关 0.78/无关 0.37） |
+| `app.rag.upload.max-file-bytes` | `RAG_UPLOAD_MAX_FILE_BYTES` | `10485760` | 单文件字节上限（须 ≤ multipart 10MB） |
+| `app.rag.upload.allowed-ext` | `RAG_UPLOAD_ALLOWED_EXT` | `md,markdown,txt` | 扩展名白名单（小写无点） |
+| `app.rag.upload.max-chunks` | `RAG_UPLOAD_MAX_CHUNKS` | `2000` | 单文档切片硬顶，超限 400 提示拆分 |
+
 ### 前端（在 `frontend/` 目录执行）
 
 ```bash
@@ -443,7 +511,7 @@ cd frontend
 npm install        # 首次安装依赖（版本已在 package.json 锁定主版本）
 
 npm run dev        # 开发服务器（默认 5173），/api 经 Vite proxy 转发到后端
-npm run test       # vitest 全量单测（jsdom，无需后端；186 测试）
+npm run test       # vitest 全量单测（jsdom，无需后端；201 测试）
 npm run build      # tsc 严格类型检查 + 生产构建（dist/）
 npm run preview    # 本地预览生产构建
 ```
@@ -496,7 +564,7 @@ server {
 
 ```bash
 # 后端（cd backend 后，JDK17）—— 多模块 reactor
-mvn -o test                              # 全模块离线测试（567 测试）
+mvn -o test                              # 全模块离线测试（699 测试）
 mvn -o install -DskipTests               # 全部模块装进本地仓（首次/拉新代码后）
 mvn -o package -DskipTests               # 编译打包（agentchat-app/target/dj-agent-chat-0.0.1-SNAPSHOT.jar）
 mvn -o -pl agentchat-app -am test        # 只测 app（-am 连带构建 spi/tools）

@@ -17,6 +17,7 @@ const TAB_ITEMS = [
   { key: 'tools', label: '工具注册表' },
   { key: 'mcp', label: 'MCP 服务器' },
   { key: 'logs', label: '审计日志' },
+  { key: 'kb', label: '知识库' },
 ]
 
 export default function AdminLayout({ page, onNavigate, onBack, onLogout, children }: AdminLayoutProps) {

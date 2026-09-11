@@ -1,5 +1,7 @@
-import { adminFetch } from './adminClient'
+import { adminFetch, adminUpload } from './adminClient'
 import type {
+  KbDocument,
+  KbHealth,
   McpServersResponse,
   PageResult,
   ToolCallLog,
@@ -43,3 +45,22 @@ export function pageToolLogs(q: ToolLogQuery) {
 
 /** 登录验证（AC-7）：GET /api/admin/tools 带头；200 即 token 有效。 */
 export const verifyAdminToken = () => listTools()
+
+// ---- 知识库（迭代6）----
+
+export const getKbHealth = () => adminFetch<KbHealth>('/api/admin/kb/health')
+
+export const listKbDocuments = () => adminFetch<KbDocument[]>('/api/admin/kb/documents')
+
+/** 上传 .md/.markdown/.txt（UTF-8）：multipart 字段名 file；201 READY。 */
+export function uploadKbDocument(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return adminUpload<KbDocument>('/api/admin/kb/documents', form)
+}
+
+export const deleteKbDocument = (id: number) =>
+  adminFetch<void>(`/api/admin/kb/documents/${id}`, { method: 'DELETE' })
+
+export const reindexKbDocument = (id: number) =>
+  adminFetch<KbDocument>(`/api/admin/kb/documents/${id}/reindex`, { method: 'POST' })

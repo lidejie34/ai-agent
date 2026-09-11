@@ -44,7 +44,8 @@ class ChatServiceSddGateTest {
         return new ChatService(chatClient, "ark-test-key", "model",
                 3, java.time.Duration.ofMillis(10), java.time.Duration.ofMillis(100),
                 null, 20, true, null,
-                new ChatService.FixedObjectProvider<>(orchestration));
+                new ChatService.FixedObjectProvider<>(orchestration),
+                null);
     }
 
     @Test

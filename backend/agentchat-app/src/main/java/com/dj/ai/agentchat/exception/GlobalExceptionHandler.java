@@ -1,12 +1,15 @@
 package com.dj.ai.agentchat.exception;
 
 import com.dj.ai.agentchat.dto.ApiError;
+import com.dj.ai.agentchat.rag.admin.KbAdminException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -79,6 +82,38 @@ public class GlobalExceptionHandler {
         // 管理端 DB 访问失败/写后刷新失败 → 503（数据可能已落库，提示稍后重试）
         log.warn("工具服务不可用: {}", e.getMessage());
         return build(HttpStatus.SERVICE_UNAVAILABLE, "TOOLS_UNAVAILABLE", e.getMessage());
+    }
+
+    @ExceptionHandler(KbAdminException.class)
+    public ResponseEntity<ApiError> handleKbAdmin(KbAdminException e) {
+        // 知识库管理端错误码 → HTTP 状态（F11）：400 文件类/404 不存在/502 上游依赖失败/503 开关关
+        HttpStatus status = switch (e.getCode()) {
+            case KbAdminException.KB_INVALID_FILE, KbAdminException.KB_FILE_TOO_LARGE ->
+                    HttpStatus.BAD_REQUEST;
+            case KbAdminException.KB_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case KbAdminException.KB_EMBEDDING_FAILED, KbAdminException.KB_STORE_FAILED ->
+                    HttpStatus.BAD_GATEWAY;
+            case KbAdminException.KB_DISABLED -> HttpStatus.SERVICE_UNAVAILABLE;
+            default -> HttpStatus.INTERNAL_SERVER_ERROR;
+        };
+        log.warn("知识库管理端错误: {} - {}", e.getCode(), e.getMessage());
+        return build(status, e.getCode(), e.getMessage());
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> handleUploadSizeExceeded(MaxUploadSizeExceededException e) {
+        // multipart 容器层超限（默认 413）统一归并为 400 KB_FILE_TOO_LARGE（F2/契约第 5 节）
+        log.warn("上传文件超过 multipart 上限: {}", e.getMessage());
+        return build(HttpStatus.BAD_REQUEST, KbAdminException.KB_FILE_TOO_LARGE,
+                "文件过大，超过 10MB 上限，请拆分或压缩后再上传");
+    }
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ApiError> handleMissingPart(MissingServletRequestPartException e) {
+        // multipart 缺少 file 字段 → 400 KB_INVALID_FILE
+        log.debug("multipart 缺少字段: {}", e.getRequestPartName());
+        return build(HttpStatus.BAD_REQUEST, KbAdminException.KB_INVALID_FILE,
+                "缺少上传文件字段 file（multipart/form-data）");
     }
 
     @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)

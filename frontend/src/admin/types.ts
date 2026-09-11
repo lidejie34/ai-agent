@@ -103,3 +103,26 @@ export interface ToolLogQuery {
   from?: string // yyyy-MM-dd HH:mm:ss
   to?: string
 }
+
+// ---- 知识库（迭代6，/api/admin/kb）----
+export type KbDocStatus = 'READY' | 'FAILED' // 同步处理，无中间态
+
+export interface KbDocument {
+  id: number
+  fileName: string
+  sizeBytes: number
+  chunkCount: number
+  status: KbDocStatus | string
+  error?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface KbHealth {
+  enabled: boolean
+  ollamaOk: boolean
+  pgOk: boolean
+  documentCount: number
+  chunkCount: number
+  dimensions: number
+}

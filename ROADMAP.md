@@ -17,7 +17,9 @@
    ↓
 迭代5 ✅ SDD 子 Agent 编排：Planner/Executor 顺序循环 + 再规划（任务拆解 → 多 Agent 协作）
    ↓
-按需穿插：可观测性 / Redis 缓存 / RAG 知识库 / 安全加固
+迭代6 ✅ RAG 知识库：全局单库（PG/pgvector + Ollama bge-m3）+ 常驻检索 Advisor（答案引文件名）
+   ↓
+按需穿插：可观测性 / Redis 缓存 / 安全加固
 
 插入迭代 F ✅ 前端对话页：Vite+React+antd5 + 会话管理 REST（MCP 迭代4 应需求延后，F 提前插入；
    仓库已重构为 backend/ + frontend/ 双子目录，后续迭代后端命令均在 backend/ 下执行）
@@ -39,6 +41,15 @@
    Planner 不挂工具、编排层不触达 ConversationStore；event:plan/event:task 帧 + 前端 Steps
    竖向面板（工具块上方）；agent_orchestration_run 懒建表审计（run_id 与工具审计 call_id
    前缀关联）；六类触顶强制收尾；真实方舟+MCP+MySQL 冒烟 7 组全 PASS 零修复
+   ↓
+迭代6 ✅ RAG 知识库（E 线）：「维持 M7 + 自写轻量件」——不升级 Spring AI，仅用 M7
+   EmbeddingModel 抽象；PG 第二数据源（@ConditionalOnProperty，懒连接不阻断启动）+
+   自写 pgvector 仓储（余弦 <=>）；标题感知切片（500 字/80 重叠）；常驻 RagAdvisor 双态
+   （topK=4/阈值 0.45，注入 userText+引用规则 system，答案附「参考资料：文件名」）挂同步/
+   SSE/Executor 三处，Planner/Synth 不检索；无命中放行、故障 WARN 降级普通对话不虚构引用；
+   管理端 /api/admin/kb（health 分项探测/上传 multipart/列表/删除级联/重建索引/同名覆盖事务）；
+   前端知识库 Tab（健康 Alert 不轮询、上传、表格、重建、Popconfirm 删除）；真实
+   Ollama bge-m3+PG+方舟冒烟 SMOKE-RAG-1~8 全 PASS 零修复
 ```
 
 ## 主线功能演进
@@ -52,7 +63,7 @@
 | 迭代 4 | MCP 工具（B） | **MCP Client（stdio）接入外部工具生态**：选型 mcp-core 0.14.0 离线手工装配（不引 starter/webflux），`app.tools.mcp.*` yml 白名单声明 server（重启生效）；启动 eager 握手+listTools 发现（everything 13 + fs 14 = 27 工具），失败隔离 UNAVAILABLE 不阻断、崩溃标记不自动重启、stderr 消费、@PreDestroy closeGracefully 零孤儿；发现工具经 **McpToolCallback 包装层**挂载（SyncMcpToolCallback 不支持 ToolContext，包装层复用 G 的 event:tool 帧/审计 handler_type=MCP/脱敏/截断/超时/三层幂等/全捕获）；`<server>_<tool>` 命名规整、与 DB 工具同点合并挂载（冲突跳过 WARN、空配置与 G 逐字节一致）；管理端只读 `GET /api/admin/mcp/servers`（无 env）+ 审计 handlerType 过滤 + tool_name 列放宽 VARCHAR(128) 幂等迁移 | ✅ 已交付（后端 **494** 测试全绿：406 既有 + 88 新增；前端 **95** 零改造；真实方舟+MySQL+双 server 冒烟 SMOKE-0/2~10 全 PASS：echo 全链路/fs 目录内读写/越权拒绝/崩溃 UNAVAILABLE/无孤儿/审计 MCP 过滤/401·405；冒烟修复 1 处低危——UNAVAILABLE 视图清空工具清单；分支 feat/mcp-tool-client 已推送 commits 1df1828+a3b40a6） | `20260904-...-mcp-tool-client` |
 | 插入迭代 H | 管理端可视化页面（H） | **纯前端管理控制台**：自写 hash 路由 `#/admin`（~35 行，对话页常驻 CSS 切换不丢状态，AdminConsole React.lazy 分包）；Admin Token 登录（内存+localStorage 独立键静默降级、验证期暂存内存、401 client 层广播顶层登出去重、仅 /api/admin/** 注头）；MCP 服务器只读面板（Badge/command/args/工具清单 Collapse/lastError Alert，无 env 无写、写方法 405）；工具注册表 CRUD（列表/启停 Switch 乐观更新失败回滚/详情抽屉/新建编辑表单预校验+Modal.confirm+PATCH 全字段不带 name+400 中文透传+503 已落库文案/删除二次确认）；审计日志页（0 基分页、toolName/sessionId/status/handlerType/时间范围过滤、失败行展开 errorMessage、手动刷新不轮询）；长文本一律 `<pre>` 纯文本不渲染 markdown/HTML；错误码差异化中文文案 | ✅ 已交付（前端 **170** 测试全绿：95 既有零修改 + 75 新增；后端 **495** 测试全绿；tsc 0 错误、vite build 独立懒加载 chunk、零新依赖；真实后端+双 MCP server+Vite proxy 冒烟 11 组全 PASS：**冒烟修复 1 处中危——迭代 G 潜伏的 MyBatis-Plus 分页拦截器缺失（审计分页 total=0/未分页）**；分支 feat/admin-management-ui 已推送 commits 1bb2052+a3c3bb7） | `20260907-...-admin-management-ui` |
 | 迭代 5 | SDD 子 Agent（C） | **Planner/Executor 顺序循环 + 再规划**（Plan-and-Execute）：`app.sdd.*` 14 键全外置、默认 `enabled=false`（条件装配 + ObjectProvider 收口，关闭与迭代4 逐字节一致）；Planner 首调结构化路由（`direct` 一次调用直答 24 码点拆帧 / `plan` 任务拆解），Executor 顺序执行任务后 Planner 再规划（`next`/`final`），Planner 兼 Synth 流式汇总；协议容错四道防线（代码块/平衡括号提取→fastjson2→重试1→路由失败降级直答/再规划失败强制收尾）；**Executor 共享对话链路同一 ToolMount**（Flux 外创建、DB+MCP 全量工具、同一 bridge/requestId/toolContext，event:tool 帧/审计/三层幂等/脱敏/超时横切零改动继承），Planner/Synth 不挂工具；编排层不注入 ConversationStore（历史以 List&lt;Message&gt; 瞬态传入，chat_message 仅落 user+最终答案）；每次模型调用新建 `prompt()` spec（M7 Advisor 链独立性实证）、sdd-orchestrator/sdd-model-call 双 daemon 池、总预算 SSE 110s/同步 55s 先于容器超时；六类触顶（轮次6/任务8/连续失败2/墙钟/重复规划/任务超时）强制收尾且答案标注未完成；SSE 新增 `event:plan`/`event:task` 帧（OrchEventBridge，五终止路径 detach、fastjson2 null 省键、error 脱敏≤500）；前端 PlanTaskBlocks（antd Steps 竖向、taskId upsert 原地更新、挂工具块上方、仅当前流式消息持有）；`agent_orchestration_run` 懒建表 best-effort 审计（role PLANNER/EXECUTOR/SYNTH、run_id=挂载 requestId 与 agent_tool_call_log.call_id 前缀关联、无外键无 admin 页）；请求体可选 `Boolean sdd` 三态（null 随开关/false 绕过/开关关时 true warn 忽略） | ✅ 已交付（后端 **595** 测试全绿：495 既有断言零修改 + 100 新增；前端 **186** 测试全绿：170 既有 + 16 新增；tsc 0 错误、vite build 通过；真实方舟+MySQL+双 MCP server+Vite proxy 冒烟 7 组全 PASS **零冒烟修复**：direct 判定/plan 多任务+MCP 工具真实挂载/再规划台账/sdd:false 绕过/轮次触顶 truncated+强制收尾/两审计表前缀关联/代理透传；2 个 low 观察项（SYNTH 审计 model 列为空、Planner 偶发冗余任务无副作用）；分支 feat/sdd-subagent-orchestration 已推送 commit c3b33a1） | `20260908-...-sdd-subagent-orchestration` |
-| 待定 | RAG 知识库（E） | PG 15432 + pgvector：文档切片 → embedding → 检索增强问答；可复用 MCP 工具能力 | ⏳ 待开始 | — |
+| 迭代 6 | RAG 知识库（E） | **全局单库 + 常驻检索增强**（「维持 M7 + 自写轻量件」，不升级 Spring AI，仅用 M7 `EmbeddingModel` 抽象）：`app.rag.*` 全外置默认 `enabled=false`（RagRuntimeConfig 全 `@Bean` 显式声明 + ObjectProvider 收口，关闭时 PG 第二数据源/Hikari 池/Ollama 客户端/Advisor 均不装配，`/api/admin/kb/**` 拦截器路径闸门 503 `KB_DISABLED`，对话与迭代5 逐字节一致）；PG 16/pgvector 第二数据源（MySQL 仍 @Primary，Hikari 懒连接不阻断启动，扩展+`rag_document`/`rag_chunk` 首次访问 best-effort 建）；TextChunker 标题感知切片（`#{1,3}` 切段、max-chars=500/overlap=80、max-chunks=2000 硬顶）；本机 Ollama bge-m3（OpenAI 兼容 /v1/embeddings，1024 维，连接+读 10s 超时，分批 embedding）；KbRepository 余弦（`<=>`）top-k 检索 + 同名覆盖「删旧级联→新建」单事务；**RagAdvisor 常驻非工具**（同步/SSE/SDD Executor 三处请求级挂载，Planner/Synth 不检索）：问题 embedding→topK=4→阈值 0.45 过滤→片段注入 userText + 「只依据资料作答、末尾列参考资料文件名（去重）」注入 system；无高于阈值命中按原请求放行（不虚构引用），embedding/检索异常 WARN 降级普通对话不阻断；管理端 `KbAdminController`：`GET /health`（Ollama 探活+PG 双计数独立 try/catch，任一计数失败双计数归零无半截值）、`POST /documents`（multipart 字段 file，扩展名白名单 md/markdown/txt + UTF-8 校验 + 10MB 上限，201 READY；向量化失败 502 KB_EMBEDDING_FAILED）、列表（不含原文）/DELETE 级联 204/`reindex` 用存文重建（失败置 FAILED 可重试）；错误码 KB_DISABLED/KB_INVALID_FILE/KB_FILE_TOO_LARGE/KB_NOT_FOUND/KB_EMBEDDING_FAILED/KB_STORE_FAILED；前端第 4 个 Tab「知识库」：健康 Alert（Ollama/PG 徽标+文档/切片/维度，仅手动刷新不轮询）、antd Upload customRequest（禁手设 Content-Type，accept .md,.markdown,.txt 单选）、文档表格（大小/切片数/状态 Tag/错误 tooltip/更新时间/重建索引/Popconfirm 危险删除级联提示）、KB_* 中文文案，AdminConsole 独立懒加载 chunk，对话页零改动 | ✅ 已交付（后端 **699** 测试全绿：origin/master 基线 568（Surefire 实测聚合，含迭代5 口径偏差修订）+ 本迭代新增 **131**（rag 包 115 + ChatServiceRagAdvisorMountTest 5 + AdminGateResolverTest 5 + ExecutorClient 2 + AdminAuthInterceptor 4），既有测试仅构造器补 ObjectProvider 适配、断言语义零改动；前端 **201** 测试全绿：186 既有 + 15 新增（KbPage 15；hash 路由 kb 用例并入既有用例不新增 it 块）；tsc 0 错误、vite build 通过；真实 Ollama bge-m3 + PG/pgvector + 方舟 + Vite proxy 冒烟 **SMOKE-RAG-1~8 全 PASS、零冒烟修复**：健康检查 401/200、上传落库一致、中文知识问答带「参考资料：文件名」、无关问题无引用放行、同名覆盖旧片段不双份、删除级联后不再引用、Ollama SIGSTOP 冻结→health 分项报红+10s 超时+对话降级 200+SIGCONT 恢复、独立实例 enabled=false 零 RAG 装配+503；另验 SSE 引用帧/reindex/`.pdf` 400/404；TDD 期修复健康探测半截计数 1 处；分支 feat/rag-knowledge-base，step_7 统一提交推送） | `20260910-...-rag-knowledge-base` |
 | 插入迭代 F | 前端对话页（F） | 仓库重构为 `backend/`+`frontend/` 双子目录（T0 纯 git mv，历史保留、146 基线零回归）；后端新增会话管理 REST（`/api/sessions` 列表/历史/重命名/删除，400/404/503 齐备）+ 首轮用户消息自动生成会话标题（20/30 codePoint 截断，best-effort）；前端 Vite5+React18+TS+antd5：fetch 手写 SSE 分帧消费（30s 看门狗、AbortController 双 reason 停止/超时）、会话侧边栏（列表/切换/重命名/删除/骨架/重试，流式中切换阻止）、Markdown 渲染（gfm+highlight，禁 rehype-raw，XSS 回归测试、代码块复制）、Enter/Shift+Enter/IME 输入、自动贴底滚动、错误码差异化文案、草稿与刷新恢复（localStorage 仅存非敏感 UI 状态）；生产同源部署（后端无 CORS，nginx 反代 `proxy_buffering off` 等 SSE 指令） | ✅ 已交付（后端 **219** 测试全绿：146 既有 + 73 新增；前端 **83** 测试全绿、`tsc -b && vite build` 零错误；真实 MySQL 8 + 方舟 + Vite proxy 双进程冒烟 PASS：页面/proxy/会话 CRUD/标题落库/级联删除/三态/400/404 全过；冒烟修复 2 处线网问题——SSE 帧被 fastjson2 JSON 转义（迭代3 潜伏）、MySQL UTC 时间差 8h；分支 feat/frontend-chat-ui 已推送 commits 98f734e+a59e4f8） | `20260903-...-frontend-chat-ui` |
 
 ## 横切工程优化（地基类，按需穿插）
@@ -98,3 +109,15 @@
   MappingJackson2HttpMessageConverter」之前即可治理普通 DTO 的 JSON 线网格式
 - **【迭代3 实证】** Hikari `initialization-fail-timeout: -1` 下 MySQL 不可达上下文照常刷新；
   DataSource.getConnection() 首次取用才失败，记忆层以此实现「无状态零 DB、会话路径 503」的懒失败语义
+- **【迭代6 实证】** 条件装配红线：RAG 全家桶一律在 `RagRuntimeConfig` 以显式 `@Bean` 声明
+  （`@ConditionalOnProperty(app.rag.enabled)`），任何 RAG 类都不加 `@Service/@Repository/@Component`
+  构造型——否则开关 false 也会被组件扫描捞起，倒逼数据源 bean 初始化；消费侧统一
+  `ObjectProvider<T>` 收口，控制器始终被扫描（关闭时拦截器路径闸门先返 503，ObjectProvider 空仅兜底）
+- **【迭代6 实测】** Ollama bge-m3（本机原生 :11434，OpenAI 兼容 `/v1/embeddings`）输出 1024 维；
+  中文知识相关片段余弦 ~0.78、无关问题（兵马俑 vs 差旅制度）~0.37，阈值 0.45 分界清晰；
+  `kill -STOP` 冻结 ollama/llama-server 可无损模拟宕机（embed 在 10s read timeout 失败，
+  `kill -CONT` 即恢复）；pgvector 余弦距离操作符 `<=>`，建索引只需 `CREATE EXTENSION vector`
+- **【迭代6 实证】** multipart 上传前端绝不能手设 Content-Type——浏览器自动生成
+  `multipart/form-data; boundary=...`，手设会丢 boundary 导致 400；antd 5 双汉字按钮
+  accessible name 会插空格（「删 除」），测试须用 `/删\s*除/` 正则；Vite 5 dev server
+  仅绑 IPv6 `::1`，curl 用 `localhost`，`127.0.0.1` 得 HTTP 000

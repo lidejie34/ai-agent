@@ -16,13 +16,15 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * 管理端鉴权拦截器（插入迭代 G，常驻）：仅拦 {@code /api/admin/**}，
+ * 管理端鉴权拦截器（插入迭代 G 常驻；迭代6 改路径分派）：仅拦 {@code /api/admin/**}，
  * 聊天/会话接口路径不匹配、零影响。
  *
- * <p>判定顺序（AC-49/50/51/2）：
+ * <p>判定顺序（AC-49/50/51/2 + RAG F11）：
  * <ol>
  *   <li>token 未配置（空白）→ 503 {@code ADMIN_NOT_CONFIGURED}（优先级最高）；</li>
- *   <li>工具总开关关闭 → 400 {@code TOOLS_DISABLED}（管理端 web 层常驻，不返回 404）；</li>
+ *   <li>路径闸门（{@link AdminGateResolver}）：tools/mcp/tool-call-logs 且工具开关关
+ *       → 400 {@code TOOLS_DISABLED}；kb 且知识库开关关 → 503 {@code KB_DISABLED}；
+ *       其他管理端路径不做功能开关校验；</li>
  *   <li>缺失/错误 {@code X-Admin-Token} → 401 {@code ADMIN_UNAUTHORIZED}；</li>
  *   <li>全部通过 → 放行。</li>
  * </ol>
@@ -39,10 +41,13 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
 
     private final AdminProperties adminProperties;
     private final boolean toolsEnabled;
+    private final boolean ragEnabled;
+    private final AdminGateResolver gateResolver = new AdminGateResolver();
 
-    public AdminAuthInterceptor(AdminProperties adminProperties, boolean toolsEnabled) {
+    public AdminAuthInterceptor(AdminProperties adminProperties, boolean toolsEnabled, boolean ragEnabled) {
         this.adminProperties = adminProperties;
         this.toolsEnabled = toolsEnabled;
+        this.ragEnabled = ragEnabled;
     }
 
     @Override
@@ -55,8 +60,14 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
                     "ADMIN_NOT_CONFIGURED", "管理端未配置访问令牌");
             return false;
         }
-        if (!toolsEnabled) {
+        AdminGateResolver.Gate gate = gateResolver.gateFor(request.getRequestURI());
+        if (gate == AdminGateResolver.Gate.TOOLS && !toolsEnabled) {
             writeError(response, HttpStatus.BAD_REQUEST, "TOOLS_DISABLED", "工具功能未启用");
+            return false;
+        }
+        if (gate == AdminGateResolver.Gate.RAG && !ragEnabled) {
+            // 知识库未启用：503（与开关缺失语义一致；控制器/服务 bean 此时也不装配）
+            writeError(response, HttpStatus.SERVICE_UNAVAILABLE, "KB_DISABLED", "知识库功能未启用");
             return false;
         }
         String presented = request.getHeader(ADMIN_TOKEN_HEADER);

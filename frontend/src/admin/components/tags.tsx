@@ -21,3 +21,14 @@ const STATUS_COLORS: Record<string, string> = {
 export function LogStatusTag({ status }: { status: string }) {
   return <Tag color={STATUS_COLORS[status]}>{status}</Tag>
 }
+
+const KB_STATUS_COLORS: Record<string, string> = {
+  READY: 'green',
+  FAILED: 'red',
+}
+
+/** 知识库文档状态（迭代6）：READY 绿 / FAILED 红 / 未知值灰。 */
+export function KbStatusTag({ status }: { status: string }) {
+  const label = status === 'READY' ? '就绪' : status === 'FAILED' ? '失败' : status
+  return <Tag color={KB_STATUS_COLORS[status]}>{label}</Tag>
+}

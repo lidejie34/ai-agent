@@ -21,6 +21,14 @@ export function fmtDuration(ms?: number | null): string {
   return `${(ms / 1000).toFixed(2)} s`
 }
 
+/** 字节大小展示（迭代6 知识库）：<1KB 显示 B；<1MB 显示 KB；之后 MB，均保留 1 位小数。 */
+export function fmtBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined) return '-'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
 /** 判定抛出物是否为带 code 的错误（ApiError/NetworkError 均满足）。 */
 export function hasErrorCode(e: unknown): e is { code: string; message?: string } {
   return !!e && typeof e === 'object' && typeof (e as { code?: unknown }).code === 'string'

@@ -44,6 +44,21 @@ export function adminErrorText(e: { code: string; message?: string }): string {
       return '工具不存在或已被删除'
     case 'TOOLS_UNAVAILABLE':
       return '工具服务暂不可用（数据库访问失败），请稍后重试'
+    case 'KB_DISABLED':
+      return '知识库功能未启用（app.rag.enabled=false）'
+    case 'KB_INVALID_FILE':
+      // 400 校验类：优先透传后端 message（如「缺少上传文件字段 file」）
+      return e.message && e.message.trim()
+        ? e.message
+        : '文件无效：仅支持 .md/.markdown/.txt（UTF-8）'
+    case 'KB_FILE_TOO_LARGE':
+      return '文件过大，超过 10MB 上限，请拆分后上传'
+    case 'KB_NOT_FOUND':
+      return '文档不存在或已被删除'
+    case 'KB_EMBEDDING_FAILED':
+      return '向量化失败（Embedding 服务不可用），可稍后在列表中重建索引'
+    case 'KB_STORE_FAILED':
+      return '知识库存储失败（向量库不可用），请稍后重试'
     case 'NETWORK_ERROR':
       return '网络连接中断，请检查网络后重试'
     default:

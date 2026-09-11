@@ -78,6 +78,12 @@ spring:
       database: 0
       timeout: 3s
 
+  # ---- 迭代6：multipart 上传（知识库 md/txt，单文件 10MB）----
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+
 # ---- 迭代3：MyBatis-Plus 持久层（会话记忆）----
 # 无 mapper XML（注解 SQL），不配 mapper-locations；下划线列↔驼峰属性显式固化（MP 默认即 true）。
 mybatis-plus:
@@ -218,6 +224,39 @@ app:
       temperature: ${APP_SDD_EXECUTOR_TEMPERATURE:}
       # 子任务结果回灌 Planner 前的截断字符数（附截断标记）
       max-result-chars: ${APP_SDD_EXECUTOR_MAX_RESULT_CHARS:2000}
+
+  # ---- 迭代6：RAG 知识库（管理端上传 md/txt → bge-m3 向量化 → pgvector；常驻 Advisor）----
+  # 总开关默认 false：关闭时 RAG 全家桶不装配（PG 连接池不初始化、Ollama 客户端不创建、
+  # RagAdvisor 不挂载），对话链路与迭代5 逐字节一致（N3）。
+  rag:
+    enabled: ${APP_RAG_ENABLED:false}
+    datasource:
+      # 独立第二数据源（PG/pgvector）；MySQL 仍是 @Primary，本项不走 spring.datasource 自动配置。
+      # 指向 docker db-postgres-1 的 ai_vector 库（首次懒建表时 CREATE EXTENSION vector）。
+      jdbc-url: ${RAG_DB_URL:jdbc:postgresql://127.0.0.1:15432/ai_vector}
+      username: ${RAG_DB_USER:postgres}
+      password: ${RAG_DB_PASSWORD:postgres}
+    ollama:
+      # 本机 Ollama（OpenAI 兼容 /v1/embeddings）；离线优先，不依赖外网。
+      base-url: ${RAG_OLLAMA_BASE_URL:http://localhost:11434}
+      # bge-m3 输出固定 1024 维，与 rag_chunk.embedding vector(1024) 绑定；换模型需重建表。
+      model: ${RAG_OLLAMA_MODEL:bge-m3}
+      timeout-ms: ${RAG_OLLAMA_TIMEOUT_MS:10000}
+    chunk:
+      # 单片段最大字符数 / 相邻重叠；heading-aware 先按 #{1,3} 标题切段再滑窗。
+      max-chars: ${RAG_CHUNK_MAX_CHARS:500}
+      overlap: ${RAG_CHUNK_OVERLAP:80}
+      heading-aware: ${RAG_CHUNK_HEADING_AWARE:true}
+    retrieve:
+      # top-k 候选；余弦阈值（实测相关 0.78/无关 0.37，0.45 间隔充裕），低于不注入。
+      top-k: ${RAG_RETRIEVE_TOP_K:4}
+      min-score: ${RAG_RETRIEVE_MIN_SCORE:0.45}
+    upload:
+      # 单文件字节上限（须 ≤ multipart max-file-size=10MB）；扩展名白名单小写无点。
+      max-file-bytes: ${RAG_UPLOAD_MAX_FILE_BYTES:10485760}
+      allowed-ext: ${RAG_UPLOAD_ALLOWED_EXT:md,markdown,txt}
+      # 单文档切片数硬顶（同步上传时延保护，超限 400 提示拆分）
+      max-chunks: ${RAG_UPLOAD_MAX_CHUNKS:2000}
 
   # ---- 插入迭代 G：管理端鉴权（/api/admin/**）----
   # token 空白=未配置 → 管理端一律 503 ADMIN_NOT_CONFIGURED；仅 env / application-local.yml 注入，不入库。

@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from 'react'
 // 路由表：#/admin、#/admin/tools → 工具注册表（默认）；#/admin/mcp → MCP；
 // #/admin/logs → 审计；#/admin/xxx 未知 → 回落 tools（AC-2/4）。
 
-export type AdminPageKey = 'tools' | 'mcp' | 'logs'
+export type AdminPageKey = 'tools' | 'mcp' | 'logs' | 'kb'
 
-const PAGE_KEYS: AdminPageKey[] = ['tools', 'mcp', 'logs']
+const PAGE_KEYS: AdminPageKey[] = ['tools', 'mcp', 'logs', 'kb']
 export const DEFAULT_ADMIN_PAGE: AdminPageKey = 'tools'
 
 export interface HashRoute {

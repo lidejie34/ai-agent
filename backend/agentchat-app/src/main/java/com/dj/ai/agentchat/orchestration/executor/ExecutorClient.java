@@ -11,12 +11,14 @@ import com.dj.ai.agentchat.orchestration.planner.SddPrompts;
 import com.dj.ai.agentchat.orchestration.planner.TaskSpec;
 import com.dj.ai.agentchat.orchestration.support.ModelInvoker;
 import com.dj.ai.agentchat.orchestration.support.TaskTimeoutException;
+import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
 import com.dj.ai.agentchat.tool.security.SecretRedactor;
 import com.dj.ai.agentchat.tool.support.ToolMount;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.lang.Nullable;
 import org.springframework.util.StringUtils;
 
@@ -58,17 +60,26 @@ public class ExecutorClient {
     /** 可空：工具开关关闭时无 SecretRedactor bean → 仅长度截断兜底（AC-36）。 */
     @Nullable
     private final SecretRedactor redactor;
+    /**
+     * RAG 常驻 Advisor（迭代6）：app.rag.enabled=false 时 provider 为空/no-bean → 不挂载。
+     * 仅 Executor 请求级挂载；Planner/Synth 不感知知识库（F3，避免规划被资料污染）。
+     * 可空仅为单测便捷构造。
+     */
+    @Nullable
+    private final ObjectProvider<RagAdvisor> ragAdvisorProvider;
 
     public ExecutorClient(ChatClient chatClient,
                           SddProperties props,
                           ModelInvoker modelInvoker,
                           OrchestrationAuditService audit,
-                          @Nullable SecretRedactor redactor) {
+                          @Nullable SecretRedactor redactor,
+                          @Nullable ObjectProvider<RagAdvisor> ragAdvisorProvider) {
         this.chatClient = chatClient;
         this.props = props;
         this.modelInvoker = modelInvoker;
         this.audit = audit;
         this.redactor = redactor;
+        this.ragAdvisorProvider = ragAdvisorProvider;
     }
 
     /**
@@ -91,6 +102,12 @@ public class ExecutorClient {
                 // Executor 是唯一挂工具的角色：共享挂载、空挂载不改变请求形态
                 if (mount != null && mount.callbacks() != null && !mount.callbacks().isEmpty()) {
                     spec.tools(mount.callbacks()).toolContext(mount.toolContext());
+                }
+                // RAG 同样只在 Executor 请求级挂载：子任务执行可参考知识库，Planner 规划不参考
+                RagAdvisor ragAdvisor = ragAdvisorProvider == null
+                        ? null : ragAdvisorProvider.getIfAvailable();
+                if (ragAdvisor != null) {
+                    spec.advisors(ragAdvisor);
                 }
                 PlannerClient.applyRoleOptions(spec, props.getExecutor());
                 return spec.call().chatResponse();

@@ -78,7 +78,8 @@ class ChatServiceOrchestrationTest {
                 3, Duration.ofMillis(10), Duration.ofMillis(100),
                 new ChatService.FixedObjectProvider<>(convStore), 20, true,
                 new ChatService.FixedObjectProvider<>(null),
-                new ChatService.FixedObjectProvider<>(orch));
+                new ChatService.FixedObjectProvider<>(orch),
+                null);
     }
 
     private static ChatRequest request(Boolean sdd, String sessionId) {

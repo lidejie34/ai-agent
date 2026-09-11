@@ -5,12 +5,14 @@ import com.dj.ai.agentchat.orchestration.audit.OrchestrationAuditService;
 import com.dj.ai.agentchat.orchestration.planner.PlannerContext;
 import com.dj.ai.agentchat.orchestration.planner.TaskSpec;
 import com.dj.ai.agentchat.orchestration.support.ModelInvoker;
+import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
 import com.dj.ai.agentchat.tool.security.SecretRedactor;
 import com.dj.ai.agentchat.tool.support.ToolCallBridge;
 import com.dj.ai.agentchat.tool.support.ToolMount;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -80,8 +82,12 @@ class ExecutorClientTest {
     }
 
     private ExecutorClient newClient() {
+        return newClient(null);
+    }
+
+    private ExecutorClient newClient(ObjectProvider<RagAdvisor> ragAdvisorProvider) {
         return new ExecutorClient(chatClient, props,
-                new ModelInvoker(Executors.newFixedThreadPool(2)), audit, redactor);
+                new ModelInvoker(Executors.newFixedThreadPool(2)), audit, redactor, ragAdvisorProvider);
     }
 
     private static PlannerContext ctx() {
@@ -250,5 +256,30 @@ class ExecutorClientTest {
         verify(audit).record(anyString(), any(), anyInt(), eq(OrchestrationAuditService.ROLE_EXECUTOR),
                 eq("t1"), any(), eq(OrchestrationAuditService.STATUS_SUCCESS), anyLong(),
                 eq("exec-model-y"), nullable(String.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void ragEnabled_executorRequestMountsAdvisor() {
+        when(spec.advisors(any(RagAdvisor.class))).thenReturn(spec);
+        when(callSpec.chatResponse()).thenReturn(chatResponse("{\"ok\":true,\"result\":\"r\"}"));
+        RagAdvisor advisor = mock(RagAdvisor.class);
+        ObjectProvider<RagAdvisor> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(advisor);
+
+        TaskOutcome o = newClient(provider).execute(task, null, ctx(), 0);
+
+        assertThat(o.ok()).isTrue();
+        verify(spec).advisors(advisor);
+    }
+
+    @Test
+    void ragAbsent_executorRequestNeverCallsAdvisors() {
+        when(callSpec.chatResponse()).thenReturn(chatResponse("{\"ok\":true,\"result\":\"r\"}"));
+
+        TaskOutcome o = newClient().execute(task, null, ctx(), 0);
+
+        assertThat(o.ok()).isTrue();
+        verify(spec, never()).advisors(any(RagAdvisor.class));
     }
 }

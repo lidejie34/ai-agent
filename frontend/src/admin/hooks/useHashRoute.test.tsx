@@ -23,11 +23,12 @@ describe('useHashRoute', () => {
     expect(result.current.page).toBe('tools')
   })
 
-  it('#/admin/tools|mcp|logs 解析为对应子页（AC-4）', () => {
-    const cases: Array<[string, 'tools' | 'mcp' | 'logs']> = [
+  it('#/admin/tools|mcp|logs|kb 解析为对应子页（AC-4）', () => {
+    const cases: Array<[string, 'tools' | 'mcp' | 'logs' | 'kb']> = [
       ['#/admin/tools', 'tools'],
       ['#/admin/mcp', 'mcp'],
       ['#/admin/logs', 'logs'],
+      ['#/admin/kb', 'kb'],
     ]
     for (const [hash, page] of cases) {
       window.location.hash = hash

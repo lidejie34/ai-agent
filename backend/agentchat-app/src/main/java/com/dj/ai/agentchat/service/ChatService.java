@@ -13,6 +13,7 @@ import com.dj.ai.agentchat.orchestration.OrchEventBridge;
 import com.dj.ai.agentchat.orchestration.OrchInput;
 import com.dj.ai.agentchat.orchestration.OrchSyncOutcome;
 import com.dj.ai.agentchat.orchestration.OrchestrationService;
+import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
 import com.dj.ai.agentchat.tool.support.ToolMount;
 import com.dj.ai.agentchat.tool.support.ToolSupport;
 import lombok.extern.slf4j.Slf4j;
@@ -93,6 +94,11 @@ public class ChatService {
      * 对话路径与迭代4 逐字节一致，AC-1）。
      */
     private final ObjectProvider<OrchestrationService> orchestrationProvider;
+    /**
+     * RAG 常驻检索 Advisor（迭代6；app.rag.enabled=false 时无 bean → null → 不挂载，
+     * 对话链路与迭代5 逐字节一致）。Planner/Synth 不经本类，天然不挂载（仅 3 个请求级位点）。
+     */
+    private final ObjectProvider<RagAdvisor> ragAdvisorProvider;
 
     @Autowired
     public ChatService(ChatClient chatClient,
@@ -105,7 +111,8 @@ public class ChatService {
                        @Value("${app.chat.memory.max-history:20}") int memoryMaxHistory,
                        @Value("${app.chat.memory.enabled:true}") boolean memoryEnabled,
                        ObjectProvider<ToolSupport> toolSupportProvider,
-                       ObjectProvider<OrchestrationService> orchestrationProvider) {
+                       ObjectProvider<OrchestrationService> orchestrationProvider,
+                       ObjectProvider<RagAdvisor> ragAdvisorProvider) {
         this.chatClient = chatClient;
         this.apiKey = apiKey;
         this.configuredModel = configuredModel;
@@ -117,6 +124,7 @@ public class ChatService {
         this.memoryEnabled = memoryEnabled;
         this.toolSupportProvider = toolSupportProvider;
         this.orchestrationProvider = orchestrationProvider;
+        this.ragAdvisorProvider = ragAdvisorProvider;
     }
 
     /**
@@ -135,7 +143,7 @@ public class ChatService {
                        ObjectProvider<ToolSupport> toolSupportProvider) {
         this(chatClient, apiKey, configuredModel, streamRetryMaxAttempts,
                 streamRetryMinBackoff, streamRetryMaxBackoff, conversationStoreProvider,
-                memoryMaxHistory, memoryEnabled, toolSupportProvider, null);
+                memoryMaxHistory, memoryEnabled, toolSupportProvider, null, null);
     }
 
     /**
@@ -144,7 +152,7 @@ public class ChatService {
      */
     public ChatService(ChatClient chatClient, String apiKey, String configuredModel) {
         this(chatClient, apiKey, configuredModel, 3,
-                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true, null, null);
+                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true, null, null, null);
     }
 
     /**
@@ -154,7 +162,7 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, true, null, null);
+                new FixedObjectProvider<>(store), memoryMaxHistory, true, null, null, null);
     }
 
     /**
@@ -164,7 +172,7 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory, boolean memoryEnabled) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled, null, null);
+                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled, null, null, null);
     }
 
     /**
@@ -296,6 +304,7 @@ public class ChatService {
         Flux<String> deferred = Flux.defer(() -> {
             ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
             applyTools(spec, toolMount);
+            applyRagAdvisor(spec, currentRagAdvisor());
             return spec.stream().content();
         });
         return withFirstChunkRetry(deferred);
@@ -307,6 +316,7 @@ public class ChatService {
         try {
             ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
             applyTools(spec, toolMount);
+            applyRagAdvisor(spec, currentRagAdvisor());
             return spec.call().chatResponse();
         } catch (InvalidChatRequestException | ChatNotConfiguredException e) {
             throw e;
@@ -365,6 +375,20 @@ public class ChatService {
         if (mount != null && !mount.callbacks().isEmpty()) {
             spec.tools(mount.callbacks()).toolContext(mount.toolContext());
         }
+    }
+
+    /**
+     * RAG Advisor 缺席（app.rag.enabled=false）不调用 {@code .advisors()}——请求形态与迭代5
+     * 逐字节一致；在场则请求级挂载（不入 defaultAdvisors，避免 Planner/Synth 也被检索增强）。
+     */
+    private static void applyRagAdvisor(ChatClient.ChatClientRequestSpec spec, RagAdvisor advisor) {
+        if (advisor != null) {
+            spec.advisors(advisor);
+        }
+    }
+
+    private RagAdvisor currentRagAdvisor() {
+        return ragAdvisorProvider == null ? null : ragAdvisorProvider.getIfAvailable();
     }
 
     /**

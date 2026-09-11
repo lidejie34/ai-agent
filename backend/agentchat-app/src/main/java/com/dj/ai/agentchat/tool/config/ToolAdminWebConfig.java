@@ -23,16 +23,19 @@ public class ToolAdminWebConfig implements WebMvcConfigurer {
 
     private final AdminProperties adminProperties;
     private final boolean toolsEnabled;
+    private final boolean ragEnabled;
 
     public ToolAdminWebConfig(AdminProperties adminProperties,
-                              @Value("${app.tools.enabled:true}") boolean toolsEnabled) {
+                              @Value("${app.tools.enabled:true}") boolean toolsEnabled,
+                              @Value("${app.rag.enabled:false}") boolean ragEnabled) {
         this.adminProperties = adminProperties;
         this.toolsEnabled = toolsEnabled;
+        this.ragEnabled = ragEnabled;
     }
 
     @Bean
     public AdminAuthInterceptor adminAuthInterceptor() {
-        return new AdminAuthInterceptor(adminProperties, toolsEnabled);
+        return new AdminAuthInterceptor(adminProperties, toolsEnabled, ragEnabled);
     }
 
     @Override

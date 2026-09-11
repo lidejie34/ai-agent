@@ -6,6 +6,7 @@ import com.dj.ai.agentchat.orchestration.audit.mapper.OrchestrationRunMapper;
 import com.dj.ai.agentchat.orchestration.executor.ExecutorClient;
 import com.dj.ai.agentchat.orchestration.planner.PlannerClient;
 import com.dj.ai.agentchat.orchestration.support.ModelInvoker;
+import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
 import com.dj.ai.agentchat.tool.security.SecretRedactor;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.ai.chat.client.ChatClient;
@@ -95,15 +96,19 @@ public class SddRuntimeConfig {
         return new PlannerClient(chatClient, properties, sddModelInvoker, orchestrationAuditService);
     }
 
-    /** Executor 角色 Client；SecretRedactor 缺席（工具开关关闭）时仅长度截断兜底。 */
+    /**
+     * Executor 角色 Client；SecretRedactor 缺席（工具开关关闭）时仅长度截断兜底；
+     * RagAdvisor 缺席（app.rag.enabled=false）时 Executor 请求不挂载知识库检索。
+     */
     @Bean
     public ExecutorClient executorClient(ChatClient chatClient,
                                          SddProperties properties,
                                          ModelInvoker sddModelInvoker,
                                          OrchestrationAuditService orchestrationAuditService,
-                                         ObjectProvider<SecretRedactor> redactorProvider) {
+                                         ObjectProvider<SecretRedactor> redactorProvider,
+                                         ObjectProvider<RagAdvisor> ragAdvisorProvider) {
         return new ExecutorClient(chatClient, properties, sddModelInvoker,
-                orchestrationAuditService, redactorProvider.getIfAvailable());
+                orchestrationAuditService, redactorProvider.getIfAvailable(), ragAdvisorProvider);
     }
 
     /**
