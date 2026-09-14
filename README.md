@@ -24,8 +24,9 @@ Spring Boot 3.4 + Spring AI 1.0.0-M7（OpenAI 兼容方式接入火山方舟）�
   env 白名单 qa/uat/product，简称自动解析/歧义回问，429/登录态/坏 uk 错误分类）、
   `code_lookup`（按 uk 映射到外部业务仓，FQCN+行号取上下文或 `grep -rnF`，只读 + 路径 canonical 闸门）、
   `qa_db_query`（经本机 docker 容器 mysql 客户端查 QA 两个只读库，SELECT 词法闸门 + 标识符白名单 +
-  LIMIT 硬顶，密码在仓库外 dbs.env）。环境差异全部外置到 `~/.ai-agent/troubleshoot/config.json`，
-  仓内只带脱敏模板，团队化时每人复制后按本机路径/凭据修改。
+  LIMIT 硬顶，密码在 gitignore 隔离的 dbs.env）。环境差异默认全部在仓内
+  `backend/agentchat-app/dev-local/troubleshoot/config.json`（不入库；`AI_AGENT_CONF_DIR`
+  可指向仓外），仓内只带脱敏模板，团队化时每人复制后按本机路径/凭据修改。
 - `frontend/`：Vite + React 18 + TypeScript + antd 5 对话页，fetch 手写 SSE 分帧消费流式接口，
   会话侧边栏（列表/切换/重命名/删除）、Markdown 渲染、停止生成、草稿与刷新恢复；
   工具调用在助手气泡内显示为「🔧 调用工具 xxx」折叠块（进行中转圈/成功耗时/失败错误摘要），
@@ -524,17 +525,20 @@ DB 注册表唯一维护，仓库不内置 SQL/种子行。
 # 前置：/opt/homebrew/bin/node（脚本头写死；≥20 支持 --experimental-strip-types）、
 #       skyeye 已 auth login、Docker Desktop 在跑（db-mysql-1 容器提供 mysql 客户端）、
 #       config 里 29 个 uk 的 code_root 已在本机检出
-mkdir -p ~/.ai-agent/troubleshoot
-cp backend/agentchat-app/scripts/troubleshoot.example.json ~/.ai-agent/troubleshoot/config.json
-cp backend/agentchat-app/scripts/dbs.example.env        ~/.ai-agent/troubleshoot/dbs.env
-chmod 600 ~/.ai-agent/troubleshoot/dbs.env
+CONF_DIR=backend/agentchat-app/dev-local/troubleshoot   # .gitignore 隔离；AI_AGENT_CONF_DIR 可覆盖
+mkdir -p "$CONF_DIR"
+cp backend/agentchat-app/scripts/troubleshoot.example.json "$CONF_DIR"/config.json
+cp backend/agentchat-app/scripts/dbs.example.env        "$CONF_DIR"/dbs.env
+chmod 600 "$CONF_DIR"/dbs.env
 # 然后手工编辑：
 #   config.json —— code_root 改成本机实际检出路径（模板里是作者本机路径）
-#   dbs.env     —— 两个 QA 只读账号密码（来源 ~/.cursor/mcp.json；文件在仓库外，勿提交勿回显）
+#   dbs.env     —— 两个 QA 只读账号密码（来源 ~/.cursor/mcp.json；勿提交勿回显）
 ```
 
-脚本用 `os.homedir()` 定位配置（不依赖被净化的 HOME）；缺 config/dbs.env 时返回
-`CONFIG_MISSING`/`DBS_MISSING` 并带复制模板的中文提示。
+脚本默认从**仓内** `backend/agentchat-app/dev-local/troubleshoot/` 定位配置（该目录被
+.gitignore 隔离，绝不入库；迭代7 原放在仓库外 `~/.ai-agent/troubleshoot/`，现以软链兼容）；
+部署时可用环境变量 `AI_AGENT_CONF_DIR` 把整个配置目录指向别处（ScriptToolHandler 白名单透传
+该变量）。缺 config/dbs.env 时返回 `CONFIG_MISSING`/`DBS_MISSING` 并带复制模板的中文提示。
 
 **三件套总览**（详细契约见 `scripts/troubleshoot-tool-registration.json`；模型指南母版在
 `scripts/guides/*.md`，登记时把对应文件全文写入 guide_md）

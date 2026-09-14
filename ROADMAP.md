@@ -135,6 +135,11 @@
   本机无 mysql 客户端时，`docker exec -i -e MYSQL_PWD=<pwd> db-mysql-1 mysql -h <QA host>`
   是可用只读通道（容器 mysql 8.0.46 实测可达 qa.cdb.17usoft.com 两端口），密码只经 `-e`
   注入进程环境、不进 SQL argv；团队化/服务器化应改 `--env-file` 600 临时文件（防本机 ps 可见）
+- **【迭代7.1 调整】** 排障三件套配置目录从仓库外 `~/.ai-agent/troubleshoot/` 移入仓内
+  `backend/agentchat-app/dev-local/troubleshoot/`（.gitignore 整目录隔离，dbs.env 明文密码/
+  config 本机绝对路径均不入库；旧位置保留软链兼容）；config.mjs 默认按脚本相对路径定位，
+  `AI_AGENT_CONF_DIR` 环境变量可覆盖（ScriptToolHandler 净化白名单显式透传）；node:test 114 全绿、
+  ScriptToolHandlerTest 17 全绿、净化环境真实 qa_db_query 验证通过（2026-09-14）
 - **【迭代7 实证】** skyeye queryLog CLI 会**静默丢弃未知 flag** 并降级默认 15 分钟窗
   （`--startTime` 拼错 → success=true 假空命中），故 argv 白名单必须在脚本层前置拦截；
   `部分应用查询失败,失败应用参数信息=[...]` 单句文案两成因（简称 uk vs uk 数过多），

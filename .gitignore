@@ -57,6 +57,9 @@ temp/
 # ========== MCP filesystem server 工作目录（迭代4，AC-29：专用目录不入仓） ==========
 mcp-workspace/
 
+# ========== 排障脚本本机配置（迭代7.1：含 dbs.env 明文密码与本机绝对路径，禁止入库） ==========
+backend/agentchat-app/dev-local/
+
 
 # ========== Optional 如果你后续加Java/Spring后端也兼容 ==========
 # target/

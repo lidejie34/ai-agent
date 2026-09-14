@@ -93,7 +93,7 @@ export function runQaDb(argv, cfg, creds, spawnFn) {
   if (!pwd) {
     return withExit(
       { success: false, errorClass: 'DB_CREDENTIAL_MISSING', message: `缺少凭据 ${dbc.passwordEnv}`,
-        hint: '请在 ~/.ai-agent/troubleshoot/dbs.env 填写该只读账号密码（仓库外，勿提交）' },
+        hint: '请在 dev-local/troubleshoot/dbs.env 填写该只读账号密码（仓内 gitignore 隔离，勿提交）' },
       2,
     );
   }

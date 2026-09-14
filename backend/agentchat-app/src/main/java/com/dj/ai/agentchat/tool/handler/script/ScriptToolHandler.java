@@ -35,7 +35,8 @@ import java.util.concurrent.TimeUnit;
  *       （绝非 {@code sh -c} 字符串），模型数据全部是独立 argv 元素，{@code ;|$()} 等元字符无语义；
  *       argv 仅按 input_schema 声明的属性名生成具名参数 {@code --name value}
  *       （≤10 个参数、单值 ≤200 字符，未声明键忽略并 WARN）；</li>
- *   <li><b>环境净化</b>：environment().clear() 后仅放白名单 PATH/LANG/LOG_DIR/TOOL_OUTPUT_MAX_CHARS，
+ *   <li><b>环境净化</b>：environment().clear() 后仅放白名单 PATH/LANG/LOG_DIR/TOOL_OUTPUT_MAX_CHARS
+ *       （外加可选透传 AI_AGENT_CONF_DIR：排障脚本配置目录覆盖，迭代7.1），
  *       不继承 ARK_API_KEY/DB 口令；工作目录锁定脚本目录；</li>
  *   <li><b>超时强杀</b>：waitFor 超时 → destroy → 3s 宽限 → destroyForcibly，结果 TIMEOUT；</li>
  *   <li><b>输出截断</b>：stdout/stderr 各有字节采集上限与字符截断标记；非零退出 → SCRIPT_EXIT_NONZERO。</li>
@@ -102,6 +103,11 @@ public class ScriptToolHandler implements ToolHandler {
         env.put("LANG", "en_US.UTF-8");
         env.put("LOG_DIR", Paths.get(properties.getBuiltin().getLogDir()).toAbsolutePath().toString());
         env.put("TOOL_OUTPUT_MAX_CHARS", String.valueOf(ctx.outputMaxChars()));
+        // 可选：覆盖排障脚本配置目录（默认仓内 dev-local/troubleshoot）；未设置则不透传
+        String confDir = System.getenv("AI_AGENT_CONF_DIR");
+        if (confDir != null && !confDir.isBlank()) {
+            env.put("AI_AGENT_CONF_DIR", confDir);
+        }
 
         long start = System.currentTimeMillis();
         Process process;

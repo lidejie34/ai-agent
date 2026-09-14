@@ -1,5 +1,6 @@
 // code_lookup：外部业务仓只读代码定位（FQCN+行号 / 固定字符串 grep）。
-// 仓根来自 ~/.ai-agent/troubleshoot/config.json 的 uk.code_root；所有命中路径过
+// 仓根来自 dev-local/troubleshoot/config.json（默认；AI_AGENT_CONF_DIR 可覆盖）的 uk.code_root；
+// 所有命中路径过
 // canonical 闸门，确保不逃逸出 code_root。仓不可读是非致命降级（CODE_ROOT_UNREADABLE）。
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';

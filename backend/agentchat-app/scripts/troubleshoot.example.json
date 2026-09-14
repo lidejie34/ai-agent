@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_comment": "排障三件套配置模板。复制到 ~/.ai-agent/troubleshoot/config.json 后按本机修改：code_root 必须是本机真实检出路径；密码不写在这里，写 dbs.env。日志环境白名单 logEnvs 不含 stage（本工具禁止查 stage 日志）；查库仅 QA。",
+  "_comment": "排障三件套配置模板。复制到 backend/agentchat-app/dev-local/troubleshoot/config.json（gitignore 隔离；或用 AI_AGENT_CONF_DIR 指向别处）后按本机修改：code_root 必须是本机真实检出路径；密码不写在这里，写 dbs.env。日志环境白名单 logEnvs 不含 stage（本工具禁止查 stage 日志）；查库仅 QA。",
   "logEnvs": ["qa", "uat", "product"],
   "dbEnv": "qa",
   "skyeye": {

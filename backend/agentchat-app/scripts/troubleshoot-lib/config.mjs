@@ -1,6 +1,6 @@
-// 配置加载：~/.ai-agent/troubleshoot/config.json + dbs.env（node os.homedir() 解析，
-// 不依赖被 ScriptToolHandler 净化掉的 HOME 环境变量）。仓内只放脱敏模板。
-import os from 'node:os';
+// 配置加载：默认读仓内 dev-local/troubleshoot/config.json + dbs.env（gitignore 隔离，不入库）；
+// 可用环境变量 AI_AGENT_CONF_DIR 覆盖配置目录（ScriptToolHandler 环境白名单透传该变量）。
+// 仓内只放脱敏模板。
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,11 @@ import { fileURLToPath } from 'node:url';
 const LIB_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const TEMPLATE_CONFIG = path.resolve(LIB_DIR, '..', 'troubleshoot.example.json');
 export const TEMPLATE_DBS = path.resolve(LIB_DIR, '..', 'dbs.example.env');
-export const TROUBLE_DIR = path.join(os.homedir(), '.ai-agent', 'troubleshoot');
+// scripts/troubleshoot-lib → 上两级到 agentchat-app，再进 dev-local/troubleshoot
+const DEFAULT_TROUBLE_DIR = path.resolve(LIB_DIR, '..', '..', 'dev-local', 'troubleshoot');
+export const TROUBLE_DIR = process.env.AI_AGENT_CONF_DIR
+  ? path.resolve(process.env.AI_AGENT_CONF_DIR)
+  : DEFAULT_TROUBLE_DIR;
 export const CONFIG_PATH = path.join(TROUBLE_DIR, 'config.json');
 export const DBS_PATH = path.join(TROUBLE_DIR, 'dbs.env');
 
@@ -30,7 +34,7 @@ export function loadConfig(configPath = CONFIG_PATH) {
     throw new ConfigError(
       'CONFIG_MISSING',
       `配置文件不存在: ${configPath}`,
-      `请执行：mkdir -p ~/.ai-agent/troubleshoot && cp "${TEMPLATE_CONFIG}" "${configPath}"`,
+      `请执行：mkdir -p "${TROUBLE_DIR}" && cp "${TEMPLATE_CONFIG}" "${configPath}"`,
     );
   }
   let cfg;
