@@ -9,6 +9,7 @@ import com.dj.ai.agentchat.tool.security.SecretRedactor;
 import com.dj.ai.agentchat.tool.support.ToolCallBridge;
 import com.dj.ai.agentchat.tool.support.ToolEvent;
 import com.dj.ai.agentchat.tool.support.ToolEventStatus;
+import com.dj.ai.agentchat.tool.support.ToolEvidenceCollector;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.junit.jupiter.api.AfterEach;
@@ -399,5 +400,63 @@ class McpToolCallbackTest {
     @Test
     void inputSchemaJson_nullSchema_defaultsToObject() {
         assertThat(McpToolCallback.toInputSchemaJson(null)).isEqualTo("{\"type\":\"object\"}");
+    }
+
+    // ---------- 迭代8：证据字段随 remember 传入，收集器记录 ----------
+
+    @Test
+    void remember_carriesEvidenceFields_collectorRecordsSuccessEntry() {
+        ToolCallBridge bridge = new ToolCallBridge();
+        ToolEvidenceCollector collector = new ToolEvidenceCollector(800, 4000);
+        bridge.attachEvidenceCollector(collector);
+
+        callback().call("{\"path\":\"/tmp/a\"}", context(bridge, "sess-1", "req-ev-1"));
+
+        String evidence = collector.renderEvidence();
+        assertThat(evidence).isNotNull();
+        assertThat(evidence)
+                .contains("my_fs_read_file | SUCCESS |")
+                .contains("入参: {\"path\":\"/tmp/a\"}")
+                // 摘录为已脱敏+截断的 server 文本（不含 <tool-result> 包裹）
+                .contains("结果: stub-mcp-result")
+                .doesNotContain("<tool-result>");
+    }
+
+    @Test
+    void remember_businessError_recordsFailedStatus_andCacheHitDoesNotDuplicate() {
+        ToolCallBridge bridge = new ToolCallBridge();
+        ToolEvidenceCollector collector = new ToolEvidenceCollector(800, 4000);
+        bridge.attachEvidenceCollector(collector);
+        gateway.result = new McpSchema.CallToolResult(
+                List.of(new McpSchema.TextContent("文件不存在")), true);
+        McpToolCallback cb = callback();
+        ToolContext ctx = context(bridge, "sess-1", "req-ev-2");
+
+        String first = cb.call("{\"path\":\"/x\"}", ctx);
+        String evidenceAfterFirst = collector.renderEvidence();
+
+        assertThat(first).contains("\"ok\":false").contains("MCP_TOOL_ERROR");
+        assertThat(evidenceAfterFirst).contains("my_fs_read_file | FAILED |");
+
+        // 缓存命中路径（重订阅重试）：不重复记证据
+        String second = cb.call("{\"path\":\"/x\"}", ctx);
+        assertThat(second).isEqualTo(first);
+        assertThat(collector.renderEvidence()).isEqualTo(evidenceAfterFirst);
+        assertThat(collector.renderEvidence().split("\n")).hasSize(1);
+    }
+
+    @Test
+    void remember_timeout_recordsTimeoutStatus() {
+        ToolCallBridge bridge = new ToolCallBridge();
+        ToolEvidenceCollector collector = new ToolEvidenceCollector(800, 4000);
+        bridge.attachEvidenceCollector(collector);
+        properties.setDefaultTimeoutMs(100);
+        gateway.sleepMs = 2000;
+
+        callback().call("{}", context(bridge, "sess-1", "req-ev-3"));
+
+        assertThat(collector.renderEvidence())
+                .contains("my_fs_read_file | TIMEOUT |")
+                .contains("超时");
     }
 }

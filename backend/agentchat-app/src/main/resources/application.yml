@@ -113,6 +113,18 @@ app:
       # 启动期 best-effort 建表（DB 不可达仅 warn，不阻断启动；懒建表保证首次记忆路径自愈）
       init-on-startup: ${APP_CHAT_MEMORY_INIT_ON_STARTUP:true}
 
+    # ---- 迭代8：工具查证证据随轮持久化（Tool Evidence Memory）----
+    # 证据随轮落库为 role=tool_evidence 消息（插在 user 与 assistant 之间），下一轮回放给模型，
+    # 前端历史/会话预览白名单过滤不可见；DDL 零变更（role VARCHAR(16) 无 CHECK）。
+    evidence:
+      # 总开关，默认关闭（配置级回滚路径）：关闭时不建收集器、不落证据，
+      # 行为与上一迭代逐字节一致；已落库证据行仍可正常回放/读取。
+      enabled: ${APP_CHAT_EVIDENCE_ENABLED:false}
+      # 单条工具结果摘录上限（字符；摘录为已脱敏+截断的结果正文，换行折叠为 " ⏎ "）
+      max-chars-per-call: ${APP_CHAT_EVIDENCE_MAX_CHARS_PER_CALL:800}
+      # 单轮证据消息总长度硬顶（字符；超限先到记录保留，末尾追加省略计数行）
+      max-chars-per-turn: ${APP_CHAT_EVIDENCE_MAX_CHARS_PER_TURN:4000}
+
     # ---- 迭代2：默认系统提示词（条件装配）----
     # 非空白 → ChatClient.defaultSystem(...) 对每次调用生效（系统消息置于消息列表最前）；
     # 空白（默认）= 迭代 1 行为，不注入系统消息。留空时支持多环境差异：不设即纯用户对话。

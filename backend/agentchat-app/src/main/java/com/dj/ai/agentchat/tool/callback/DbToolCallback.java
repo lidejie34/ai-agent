@@ -163,7 +163,15 @@ public class DbToolCallback implements ToolCallback {
                 result.ok() ? null : truncate(redactor.redact(safeMessage(result.errorMessage())),
                         AUDIT_ERROR_MAX_CHARS)));
         if (bridge != null) {
-            bridge.remember(dedupKey, new ToolCallBridge.CachedOutcome(resultText));
+            // 迭代8：remember 顺带传证据字段（toolName/状态/耗时/入参摘要/已脱敏已截断的结果
+            // 正文 body，不含 <tool-result> 包裹）；未挂收集器时零开销，缓存命中路径不走到这里
+            bridge.remember(dedupKey, new ToolCallBridge.CachedOutcome(
+                    resultText,
+                    tool.getToolName(),
+                    result.status(),
+                    duration,
+                    argsSummary,
+                    body));
         }
         return resultText;
     }

@@ -1,6 +1,7 @@
 package com.dj.ai.agentchat.memory.mybatis;
 
 import com.dj.ai.agentchat.memory.ConversationStore;
+import com.dj.ai.agentchat.memory.ToolEvidenceMessage;
 import com.dj.ai.agentchat.memory.mapper.ChatMessageMapper;
 import com.dj.ai.agentchat.memory.mapper.ChatSessionMapper;
 import com.dj.ai.agentchat.memory.po.ChatMessagePO;
@@ -31,6 +32,9 @@ import java.util.List;
 @Slf4j
 public class MybatisChatMemory implements ConversationStore {
 
+    /** 证据行回放给模型时的内容前缀（迭代8）：标识该段文本为此前轮次的工具查证记录。 */
+    public static final String EVIDENCE_REPLAY_PREFIX = "【此前工具查证记录】\n";
+
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ChatMemorySchemaInitializer schemaInitializer;
@@ -50,7 +54,10 @@ public class MybatisChatMemory implements ConversationStore {
         for (Message message : messages) {
             ChatMessagePO po = new ChatMessagePO();
             po.setSessionId(conversationId);
-            po.setRole(roleOf(message.getMessageType()));
+            // 迭代8：证据消息 instanceof 优先识别写 tool_evidence（不经过 roleOf，
+            // 其 ASSISTANT 占位 type 不会产生误写）；其余走 roleOf 既有路径逐字节不变
+            po.setRole(message instanceof ToolEvidenceMessage ? "tool_evidence"
+                    : roleOf(message.getMessageType()));
             po.setContent(message.getText());
             chatMessageMapper.insert(po);
         }
@@ -117,6 +124,10 @@ public class MybatisChatMemory implements ConversationStore {
             case "user" -> new UserMessage(po.getContent());
             case "assistant" -> new AssistantMessage(po.getContent());
             case "system" -> new SystemMessage(po.getContent());
+            // 迭代8：证据行回放为带前缀的 AssistantMessage（OpenAI 兼容协议 tool role 需配对
+            // tool_call_id 无法简单构造，assistant 是自然语言上下文最兼容的载体）。
+            // 读侧不做开关门控：开关关闭后已落库证据仍正常回放，避免防御性 throw 杀死整段历史读取
+            case "tool_evidence" -> new AssistantMessage(EVIDENCE_REPLAY_PREFIX + po.getContent());
             default -> throw new IllegalArgumentException("未知消息 role: " + po.getRole());
         };
     }

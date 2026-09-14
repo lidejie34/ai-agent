@@ -17,12 +17,23 @@ import java.util.List;
 public interface ChatMessageMapper extends BaseMapper<ChatMessagePO> {
 
     /**
-     * 取该会话最近 N 条消息，<b>时间正序</b>返回：内层按 id DESC 取最近 N 条，
-     * 外层再按 id ASC 正序（与 InMemoryChatMemory 的 lastN 语义一致，实证 1/9）。
-     * {@code LIMIT #{n}} 为预编译参数（MySQL 8 实测可用），n 为服务端配置 int，无注入面。
+     * 取该会话最近 N 条消息，<b>时间正序</b>返回（与 InMemoryChatMemory 的 lastN 语义一致，
+     * 实证 1/9）。{@code LIMIT #{n}} 为预编译参数（MySQL 8 实测可用），n 为服务端配置 int，无注入面。
+     *
+     * <p>迭代8 窗口语义：窗口只按 user/assistant/system 计 N 条——内层在白名单 role 内
+     * 倒序取最近 N 条定窗口下界 {@code min_id}（MySQL 不允许 LIMIT 出现在 IN 子查询，
+     * 故用 JOIN 派生表规避），外层取回 {@code id >= min_id} 的<b>全部角色</b>（含窗口内的
+     * tool_evidence 证据行，证据不挤占对话窗口、随窗口自然淘汰）。无证据会话的所有行均在
+     * 白名单内 → 结果集与旧 SQL 逐行一致（回归保证）。
      */
-    @Select("SELECT id, session_id, role, content, created_at FROM "
-            + "(SELECT * FROM chat_message WHERE session_id = #{sessionId} ORDER BY id DESC LIMIT #{n}) t "
+    @Select("SELECT t.id, t.session_id, t.role, t.content, t.created_at FROM chat_message t "
+            + "INNER JOIN ("
+            + "SELECT MIN(w.id) AS min_id FROM ("
+            + "SELECT id FROM chat_message "
+            + "WHERE session_id = #{sessionId} AND role IN ('user','assistant','system') "
+            + "ORDER BY id DESC LIMIT #{n}"
+            + ") w"
+            + ") win ON t.session_id = #{sessionId} AND t.id >= win.min_id "
             + "ORDER BY t.id ASC")
     List<ChatMessagePO> selectRecent(@Param("sessionId") String sessionId, @Param("n") int n);
 
@@ -44,11 +55,14 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessagePO> {
      * 一次 IN 批量取回多个会话各自「最近一条消息」（迭代4 FR-5，AC-14 无 N+1）：
      * 内层按 session_id 分组取 MAX(id)，外层 JOIN 回行取全文。空集合由调用方（Manager）
      * 拦截不发查询，避免 {@code IN ()} 语法错误。
+     *
+     * <p>迭代8：内层 MAX(id) 加 role 白名单——会话预览必须跳过 tool_evidence 证据行
+     * （证据仅供模型回放，用户出口不可见），否则预览变成证据文本。
      */
     @Select("<script>"
             + "SELECT m.id, m.session_id, m.role, m.content, m.created_at FROM chat_message m "
             + "INNER JOIN (SELECT session_id, MAX(id) AS max_id FROM chat_message "
-            + "WHERE session_id IN "
+            + "WHERE role IN ('user','assistant','system') AND session_id IN "
             + "<foreach collection='sessionIds' item='sid' open='(' separator=',' close=')'>#{sid}</foreach> "
             + "GROUP BY session_id) t ON m.id = t.max_id"
             + "</script>")

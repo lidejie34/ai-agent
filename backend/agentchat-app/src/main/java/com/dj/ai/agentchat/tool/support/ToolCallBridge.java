@@ -19,11 +19,32 @@ import java.util.function.Consumer;
  */
 public class ToolCallBridge {
 
-    /** 一次工具调用的缓存结果（回传模型的最终文本）。 */
-    public record CachedOutcome(String resultText) {
+    /**
+     * 一次工具调用的缓存结果（回传模型的最终文本）+ 证据字段（迭代8）。
+     *
+     * @param resultText     回传模型的最终文本（含 {@code <tool-result>} 包裹）
+     * @param toolName       工具名（证据用；null = 无证据语义，不记录）
+     * @param status         SUCCESS / FAILED / TIMEOUT（失败/超时照常记录）
+     * @param durationMs     执行耗时
+     * @param argsSummary    已脱敏 + 截断的入参摘要
+     * @param resultExcerpt  已脱敏 + 截断的结果正文（不含 {@code <tool-result>} 包裹）
+     */
+    public record CachedOutcome(String resultText,
+                                String toolName,
+                                String status,
+                                long durationMs,
+                                String argsSummary,
+                                String resultExcerpt) {
+        /** 兼容既有单参调用（无证据语义，既有调用点零改动）。 */
+        public CachedOutcome(String resultText) {
+            this(resultText, null, null, 0L, null, null);
+        }
     }
 
     private final Map<String, CachedOutcome> cache = new ConcurrentHashMap<>();
+
+    /** 证据收集器（迭代8）：默认 null = 不收集；volatile 保证工具线程即时看到 attach。 */
+    private volatile ToolEvidenceCollector evidenceCollector;
 
     // 默认 noop（同步路径）；volatile 保证工具线程即时看到 detach
     private volatile Consumer<ToolEvent> sink = event -> {
@@ -55,8 +76,30 @@ public class ToolCallBridge {
         return cache.get(dedupKey);
     }
 
-    /** 记幂等缓存（putIfAbsent，防御并发同键）。 */
+    /**
+     * 挂接证据收集器（迭代8；ChatService 在开关开启且有 bridge 时于工具执行前的装配阶段调用）。
+     */
+    public void attachEvidenceCollector(ToolEvidenceCollector collector) {
+        this.evidenceCollector = collector;
+    }
+
+    /**
+     * 记幂等缓存（putIfAbsent，防御并发同键）。证据记录与缓存写入同一时机：
+     * 仅首次写入成功（putIfAbsent 返回 null）、挂了收集器、且 outcome 带 toolName 时记录一条——
+     * Flux.defer 重订阅重跑工具在 lookup() 即早退，永不走到这里，证据天然只记一次。
+     * 收集过程任何异常吞掉，绝不阻断工具执行（best-effort 旁路约束）。
+     */
     public void remember(String dedupKey, CachedOutcome outcome) {
-        cache.putIfAbsent(dedupKey, outcome);
+        boolean first = cache.putIfAbsent(dedupKey, outcome) == null;
+        ToolEvidenceCollector collector = this.evidenceCollector;
+        if (first && collector != null && outcome.toolName() != null) {
+            try {
+                collector.record(new ToolEvidenceCollector.Entry(
+                        outcome.toolName(), outcome.status(), outcome.durationMs(),
+                        outcome.argsSummary(), outcome.resultExcerpt()));
+            } catch (Throwable t) {
+                // 证据记录失败不影响工具执行与缓存
+            }
+        }
     }
 }

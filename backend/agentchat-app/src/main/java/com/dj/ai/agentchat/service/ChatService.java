@@ -1,5 +1,6 @@
 package com.dj.ai.agentchat.service;
 
+import com.dj.ai.agentchat.config.ChatEvidenceProperties;
 import com.dj.ai.agentchat.dto.ChatMessage;
 import com.dj.ai.agentchat.dto.ChatRequest;
 import com.dj.ai.agentchat.dto.ChatResponse;
@@ -9,11 +10,13 @@ import com.dj.ai.agentchat.exception.MemoryPersistException;
 import com.dj.ai.agentchat.exception.MemoryUnavailableException;
 import com.dj.ai.agentchat.exception.ModelCallException;
 import com.dj.ai.agentchat.memory.ConversationStore;
+import com.dj.ai.agentchat.memory.ToolEvidenceMessage;
 import com.dj.ai.agentchat.orchestration.OrchEventBridge;
 import com.dj.ai.agentchat.orchestration.OrchInput;
 import com.dj.ai.agentchat.orchestration.OrchSyncOutcome;
 import com.dj.ai.agentchat.orchestration.OrchestrationService;
 import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
+import com.dj.ai.agentchat.tool.support.ToolEvidenceCollector;
 import com.dj.ai.agentchat.tool.support.ToolMount;
 import com.dj.ai.agentchat.tool.support.ToolSupport;
 import lombok.extern.slf4j.Slf4j;
@@ -99,6 +102,11 @@ public class ChatService {
      * 对话链路与迭代5 逐字节一致）。Planner/Synth 不经本类，天然不挂载（仅 3 个请求级位点）。
      */
     private final ObjectProvider<RagAdvisor> ragAdvisorProvider;
+    /**
+     * 工具查证证据配置（迭代8；enabled=false 默认关，关闭路径不建收集器、不落证据，
+     * 行为与上一迭代逐字节一致）。bean 经 {@code ChatEvidenceConfig} 无条件绑定恒在场。
+     */
+    private final ChatEvidenceProperties evidenceProperties;
 
     @Autowired
     public ChatService(ChatClient chatClient,
@@ -112,7 +120,8 @@ public class ChatService {
                        @Value("${app.chat.memory.enabled:true}") boolean memoryEnabled,
                        ObjectProvider<ToolSupport> toolSupportProvider,
                        ObjectProvider<OrchestrationService> orchestrationProvider,
-                       ObjectProvider<RagAdvisor> ragAdvisorProvider) {
+                       ObjectProvider<RagAdvisor> ragAdvisorProvider,
+                       ChatEvidenceProperties evidenceProperties) {
         this.chatClient = chatClient;
         this.apiKey = apiKey;
         this.configuredModel = configuredModel;
@@ -125,11 +134,37 @@ public class ChatService {
         this.toolSupportProvider = toolSupportProvider;
         this.orchestrationProvider = orchestrationProvider;
         this.ragAdvisorProvider = ragAdvisorProvider;
+        this.evidenceProperties = evidenceProperties;
+    }
+
+    /**
+     * 迭代8 前的既有 12 参构造（非 @Autowired 便捷构造）：委托 13 参主构造，
+     * 证据 properties 传默认关闭实例（enabled=false）——ChatServiceOrchestrationTest /
+     * ChatServiceSddGateTest / ChatServiceRagAdvisorMountTest 等既有调用点零改动编译通过，
+     * 且默认关保证既有测试逐字节回归。
+     */
+    public ChatService(ChatClient chatClient,
+                       String apiKey,
+                       String configuredModel,
+                       int streamRetryMaxAttempts,
+                       Duration streamRetryMinBackoff,
+                       Duration streamRetryMaxBackoff,
+                       ObjectProvider<ConversationStore> conversationStoreProvider,
+                       int memoryMaxHistory,
+                       boolean memoryEnabled,
+                       ObjectProvider<ToolSupport> toolSupportProvider,
+                       ObjectProvider<OrchestrationService> orchestrationProvider,
+                       ObjectProvider<RagAdvisor> ragAdvisorProvider) {
+        this(chatClient, apiKey, configuredModel, streamRetryMaxAttempts,
+                streamRetryMinBackoff, streamRetryMaxBackoff, conversationStoreProvider,
+                memoryMaxHistory, memoryEnabled, toolSupportProvider, orchestrationProvider,
+                ragAdvisorProvider, new ChatEvidenceProperties());
     }
 
     /**
      * 迭代 G 测试便捷构造（10 参，无编排）：委托全参构造，编排 ObjectProvider 传 null
      * （app.sdd.enabled=false 语义；既有工具挂载测试零改动，AC-1）。
+     * 迭代8：证据 properties 传默认关闭实例（enabled=false），既有测试逐字节回归。
      */
     public ChatService(ChatClient chatClient,
                        String apiKey,
@@ -143,7 +178,8 @@ public class ChatService {
                        ObjectProvider<ToolSupport> toolSupportProvider) {
         this(chatClient, apiKey, configuredModel, streamRetryMaxAttempts,
                 streamRetryMinBackoff, streamRetryMaxBackoff, conversationStoreProvider,
-                memoryMaxHistory, memoryEnabled, toolSupportProvider, null, null);
+                memoryMaxHistory, memoryEnabled, toolSupportProvider, null, null,
+                new ChatEvidenceProperties());
     }
 
     /**
@@ -152,7 +188,8 @@ public class ChatService {
      */
     public ChatService(ChatClient chatClient, String apiKey, String configuredModel) {
         this(chatClient, apiKey, configuredModel, 3,
-                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true, null, null, null);
+                Duration.ofMillis(10), Duration.ofMillis(100), null, 20, true, null, null, null,
+                new ChatEvidenceProperties());
     }
 
     /**
@@ -162,7 +199,8 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, true, null, null, null);
+                new FixedObjectProvider<>(store), memoryMaxHistory, true, null, null, null,
+                new ChatEvidenceProperties());
     }
 
     /**
@@ -172,7 +210,8 @@ public class ChatService {
                        ConversationStore store, int memoryMaxHistory, boolean memoryEnabled) {
         this(chatClient, apiKey, configuredModel, 3,
                 Duration.ofMillis(10), Duration.ofMillis(100),
-                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled, null, null, null);
+                new FixedObjectProvider<>(store), memoryMaxHistory, memoryEnabled, null, null, null,
+                new ChatEvidenceProperties());
     }
 
     /**
@@ -202,6 +241,8 @@ public class ChatService {
         MemoryContext memory = prepareMemory(request);
         List<Message> messages = assembleMessages(request, memory);
         ToolMount toolMount = mountTools(memory.sessionId());
+        // 迭代8：证据收集器在模型调用前挂到共享 bridge（编排 Executor 与普通路径同一 bridge）
+        ToolEvidenceCollector evidenceCollector = attachEvidenceCollector(toolMount);
         log.debug("同步调用模型: 消息总数={}, 配置model={}, sessionId={}, 工具数={}, 编排={}",
                 messages.size(), configuredModel, memory.sessionId(),
                 toolMount == null ? 0 : toolMount.callbacks().size(),
@@ -234,7 +275,7 @@ public class ChatService {
         }
         // 模型成功后成对落库（失败 → 500，reply 不返回）；模型异常不落库（编排/普通路径一致）
         if (memory.stateful()) {
-            persistTurn(memory, request.message(), reply);
+            persistTurn(memory, request.message(), reply, evidenceCollector);
         }
         return new ChatResponse(reply, model, memory.sessionId());
     }
@@ -257,6 +298,9 @@ public class ChatService {
         List<Message> messages = assembleMessages(request, memory);
         // 工具挂载必须在 Flux.defer 之外创建：requestId/bridge 跨重订阅（重试）稳定，dedupKey 才稳定（S4）
         ToolMount toolMount = mountTools(memory.sessionId());
+        // 迭代8：证据收集器随 mount 一起在 defer 外创建并挂接——跨重订阅同一实例，
+        // 重试重跑工具走幂等缓存早退，证据天然只记一次
+        ToolEvidenceCollector evidenceCollector = attachEvidenceCollector(toolMount);
         log.debug("流式调用模型: 消息总数={}, 配置model={}, sessionId={}, 工具数={}",
                 messages.size(), configuredModel, memory.sessionId(),
                 toolMount == null ? 0 : toolMount.callbacks().size());
@@ -291,7 +335,8 @@ public class ChatService {
                         e -> (e instanceof ModelCallException) ? e : new ModelCallException(STREAM_FAILED_MESSAGE, e))
                 .doOnNext(aggregated::append)
                 .publishOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                .doOnComplete(() -> persistStreamTurn(memory, request.message(), aggregated));
+                .doOnComplete(() -> persistStreamTurn(memory, request.message(), aggregated,
+                        evidenceCollector));
         return new ChatStreamResult(memory.stateful() ? memory.sessionId() : null, chunks,
                 toolMount == null ? null : toolMount.bridge(), orchBridge);
     }
@@ -392,15 +437,21 @@ public class ChatService {
     }
 
     /**
-     * 流式 complete 后成对落库：[落库前缀(seed)] + 本轮 user + 聚合全文 assistant。
+     * 流式 complete 后成对落库：[落库前缀(seed)] + 本轮 user + [证据] + 聚合全文 assistant。
      * 任何异常仅 error 日志（吞掉）——若抛出会被 Reactor 转成 onError 导致 done 变 error（AC-17）。
      */
-    private void persistStreamTurn(MemoryContext memory, String userText, StringBuilder aggregated) {
+    private void persistStreamTurn(MemoryContext memory, String userText, StringBuilder aggregated,
+                                   ToolEvidenceCollector evidenceCollector) {
         if (!memory.stateful()) {
             return;
         }
         List<Message> toPersist = new ArrayList<>(memory.persistPrefix());
         toPersist.add(new UserMessage(userText));
+        // 迭代8：证据消息插在 user 与 assistant 之间（渲染 null/异常仅跳过证据，不影响主落库）
+        ToolEvidenceMessage evidence = renderEvidenceMessage(evidenceCollector);
+        if (evidence != null) {
+            toPersist.add(evidence);
+        }
         toPersist.add(new AssistantMessage(aggregated.toString()));
         try {
             memory.store().add(memory.sessionId(), toPersist);
@@ -499,12 +550,18 @@ public class ChatService {
     }
 
     /**
-     * 同步成对落库：[落库前缀(seed)] + 本轮 user + assistant 同批写入；
+     * 同步成对落库：[落库前缀(seed)] + 本轮 user + [证据] + assistant 同批写入；
      * DataAccessException → 500（reply 不返回，客户端整轮重试，FR-12/AC-17）。
      */
-    private void persistTurn(MemoryContext memory, String userText, String reply) {
+    private void persistTurn(MemoryContext memory, String userText, String reply,
+                             ToolEvidenceCollector evidenceCollector) {
         List<Message> toPersist = new ArrayList<>(memory.persistPrefix());
         toPersist.add(new UserMessage(userText));
+        // 迭代8：证据消息插在 user 与 assistant 之间（渲染 null/异常仅跳过证据，不影响主落库）
+        ToolEvidenceMessage evidence = renderEvidenceMessage(evidenceCollector);
+        if (evidence != null) {
+            toPersist.add(evidence);
+        }
         toPersist.add(new AssistantMessage(reply));
         try {
             memory.store().add(memory.sessionId(), toPersist);
@@ -512,6 +569,43 @@ public class ChatService {
             log.error("同步会话落库失败: sessionId={}, 消息条数={}",
                     memory.sessionId(), toPersist.size(), e);
             throw new MemoryPersistException(MEMORY_PERSIST_FAILED_MESSAGE, e);
+        }
+    }
+
+    /**
+     * 挂接证据收集器（迭代8）：开关关 / 无 mount / 无 bridge → null 短路；
+     * 开启时新建请求级收集器并挂到共享 bridge（编排 Executor 与普通路径同一 bridge）。
+     */
+    private ToolEvidenceCollector attachEvidenceCollector(ToolMount toolMount) {
+        if (evidenceProperties == null || !evidenceProperties.isEnabled()
+                || toolMount == null || toolMount.bridge() == null) {
+            return null;
+        }
+        ToolEvidenceCollector collector = newEvidenceCollector();
+        toolMount.bridge().attachEvidenceCollector(collector);
+        return collector;
+    }
+
+    /** 证据收集器工厂（包级可见，测试可覆写注入渲染异常的收集器验证兜底路径）。 */
+    ToolEvidenceCollector newEvidenceCollector() {
+        return new ToolEvidenceCollector(
+                evidenceProperties.getMaxCharsPerCall(), evidenceProperties.getMaxCharsPerTurn());
+    }
+
+    /**
+     * 渲染证据消息（迭代8）：收集器缺席（开关关/无工具挂载）/ 本轮无证据 / 渲染异常
+     * 均返回 null——仅跳过证据落库，绝不影响 user/assistant 主落库。
+     */
+    private ToolEvidenceMessage renderEvidenceMessage(ToolEvidenceCollector collector) {
+        if (collector == null) {
+            return null;
+        }
+        try {
+            String text = collector.renderEvidence();
+            return StringUtils.hasText(text) ? new ToolEvidenceMessage(text) : null;
+        } catch (RuntimeException e) {
+            log.error("证据渲染失败，本轮跳过证据落库（不影响对话落库）: {}", e.getMessage());
+            return null;
         }
     }
 

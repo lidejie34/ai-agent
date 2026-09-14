@@ -22,6 +22,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 会话管理服务（迭代4）：会话列表/历史消息/删除/重命名的业务编排与异常归一。
@@ -46,6 +47,8 @@ public class SessionService {
     private static final String SESSION_NOT_FOUND_MESSAGE = "会话不存在或已被删除";
     private static final String TITLE_BLANK_MESSAGE = "title 不能为空";
     private static final String TITLE_TOO_LONG_MESSAGE = "title 长度须为 1–200 字符";
+    /** 用户可见 role 白名单（迭代8）：tool_evidence 仅供模型回放，任何用户出口不可见。 */
+    private static final Set<String> VISIBLE_ROLES = Set.of("user", "assistant", "system");
 
     private final ObjectProvider<SessionManager> managerProvider;
     private final boolean memoryEnabled;
@@ -93,7 +96,9 @@ public class SessionService {
         SessionIds.requireUuid(sessionId);
         findExisting(manager, sessionId);
         try {
+            // 迭代8：白名单过滤——证据行（tool_evidence）不下发前端；无证据会话结果逐字段不变
             return manager.listMessagesAscending(sessionId).stream()
+                    .filter(po -> VISIBLE_ROLES.contains(po.getRole()))
                     .map(po -> new SessionMessageView(po.getRole(), po.getContent(), po.getCreatedAt()))
                     .toList();
         } catch (DataAccessException e) {

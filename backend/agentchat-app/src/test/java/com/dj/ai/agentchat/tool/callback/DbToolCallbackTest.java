@@ -14,6 +14,7 @@ import com.dj.ai.agentchat.tool.security.SecretRedactor;
 import com.dj.ai.agentchat.tool.support.ToolCallBridge;
 import com.dj.ai.agentchat.tool.support.ToolEvent;
 import com.dj.ai.agentchat.tool.support.ToolEventStatus;
+import com.dj.ai.agentchat.tool.support.ToolEvidenceCollector;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -328,5 +329,66 @@ class DbToolCallbackTest {
         AgentToolCallLogPO po = lastAuditPo();
         assertThat(po.getInputSummary()).contains(SecretRedactor.REDACTED);
         assertThat(po.getInputSummary()).doesNotContain("ark-abcdefgh12345678XYZ");
+    }
+
+    // ---------- 迭代8：证据字段随 remember 传入，收集器记录 ----------
+
+    @Test
+    void remember_carriesEvidenceFields_collectorRecordsSuccessEntry() {
+        ToolCallBridge bridge = new ToolCallBridge();
+        ToolEvidenceCollector collector = new ToolEvidenceCollector(800, 4000);
+        bridge.attachEvidenceCollector(collector);
+        handler.result = ToolExecutionResult.success("line1\nline2");
+
+        String out = callback().call("{\"minutes\":30}", context(bridge, "sess-1", "req-ev-1"));
+
+        String evidence = collector.renderEvidence();
+        assertThat(evidence).isNotNull();
+        assertThat(evidence)
+                .contains("demo_builtin_tool | SUCCESS |")
+                .contains("入参: {\"minutes\":30}")
+                // 摘录为已脱敏+截断的结果正文（不含 <tool-result> 包裹），换行已折叠
+                .contains("结果: line1 ⏎ line2")
+                .doesNotContain("<tool-result>");
+        assertThat(out).contains("line1\nline2"); // 回传模型文本不受影响
+    }
+
+    @Test
+    void remember_failedCall_recordsFailedStatus_andCacheHitDoesNotDuplicate() {
+        ToolCallBridge bridge = new ToolCallBridge();
+        ToolEvidenceCollector collector = new ToolEvidenceCollector(800, 4000);
+        bridge.attachEvidenceCollector(collector);
+        handler.toThrow = new RuntimeException("处理器炸了");
+        DbToolCallback cb = callback();
+        ToolContext ctx = context(bridge, "sess-1", "req-ev-2");
+
+        String first = cb.call("{}", ctx);
+        String evidenceAfterFirst = collector.renderEvidence();
+
+        assertThat(first).contains("\"ok\":false");
+        assertThat(evidenceAfterFirst)
+                .contains("demo_builtin_tool | FAILED |")
+                .contains("处理器炸了");
+
+        // 缓存命中路径（重订阅重试）：不重复记证据
+        String second = cb.call("{}", ctx);
+        assertThat(second).isEqualTo(first);
+        assertThat(collector.renderEvidence()).isEqualTo(evidenceAfterFirst);
+        assertThat(collector.renderEvidence().split("\n")).hasSize(1);
+    }
+
+    @Test
+    void remember_timeoutCall_recordsTimeoutStatus() {
+        ToolCallBridge bridge = new ToolCallBridge();
+        ToolEvidenceCollector collector = new ToolEvidenceCollector(800, 4000);
+        bridge.attachEvidenceCollector(collector);
+        tool.setTimeoutMs(100);
+        handler.sleepMs = 2000;
+
+        callback().call("{}", context(bridge, "sess-1", "req-ev-3"));
+
+        assertThat(collector.renderEvidence())
+                .contains("demo_builtin_tool | TIMEOUT |")
+                .contains("超时");
     }
 }

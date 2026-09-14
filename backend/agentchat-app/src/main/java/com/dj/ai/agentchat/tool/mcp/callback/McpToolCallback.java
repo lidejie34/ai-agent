@@ -154,7 +154,15 @@ public class McpToolCallback implements ToolCallback {
                 result.ok() ? null : truncate(redactor.redact(safeMessage(result.errorMessage())),
                         AUDIT_ERROR_MAX_CHARS)));
         if (bridge != null) {
-            bridge.remember(dedupKey, new ToolCallBridge.CachedOutcome(resultText));
+            // 迭代8：remember 顺带传证据字段（带前缀全名/状态/耗时/入参摘要/已脱敏已截断的
+            // 结果正文 body，不含 <tool-result> 包裹）；未挂收集器时零开销，缓存命中不重复记
+            bridge.remember(dedupKey, new ToolCallBridge.CachedOutcome(
+                    resultText,
+                    exposedName,
+                    result.status(),
+                    duration,
+                    argsSummary,
+                    body));
         }
         return resultText;
     }

@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS chat_session (
 CREATE TABLE IF NOT EXISTS chat_message (
   id         BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   session_id VARCHAR(36) NOT NULL COMMENT '所属会话',
-  role       VARCHAR(16) NOT NULL COMMENT 'user / assistant（system 本期不入库）',
+  role       VARCHAR(16) NOT NULL COMMENT 'user / assistant / system；迭代8 起另有 tool_evidence（工具查证证据，仅供模型回放，用户出口白名单过滤）',
   content    MEDIUMTEXT NOT NULL COMMENT '消息全文，不截断',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_session (session_id, id)
