@@ -1,5 +1,11 @@
 # qa_db_query 使用指南（QA 只读库交叉验证）
 
+> **已下线（迭代7.2，2026-09-14）**：DB `enabled=false`，不再挂载给模型。
+> 能力由 **easy-mysql-mcp**（`tetitcdrp-qa` / `tetitcdrporder-qa` / `tetitcopenapi-qa`，整库只读）替代，配置见 `application-local.yml`。
+> 本文件仅作回滚参考，如需恢复：PATCH `/api/admin/tools/{id}` 置 `enabled=true` 并同步恢复 `guideMd`。
+
+---
+
 经本机 docker 容器 mysql 客户端查 QA 只读库。**只能 SELECT**，写操作在工具层被硬拦截。
 product/uat 没有数据库连接，**生产只查日志不查库**；查库仅用于验证日志里的状态/落库是否一致。
 

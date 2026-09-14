@@ -140,6 +140,13 @@
   config 本机绝对路径均不入库；旧位置保留软链兼容）；config.mjs 默认按脚本相对路径定位，
   `AI_AGENT_CONF_DIR` 环境变量可覆盖（ScriptToolHandler 净化白名单显式透传）；node:test 114 全绿、
   ScriptToolHandlerTest 17 全绿、净化环境真实 qa_db_query 验证通过（2026-09-14）
+- **【迭代7.2 调整】** 排障三件套中的 code_lookup / qa_db_query 两个 SCRIPT 工具下线
+  （DB enabled=false，脚本与指南保留作回滚），能力由 **codegraph MCP**
+  （`codegraph_codegraph_explore`，projectPath 按调用指定、按需懒索引——未索引仓由模型
+  引导用户在终端 `codegraph init`）+ **easy-mysql-mcp**（tetitcdrp-qa/tetitcdrporder-qa/
+  tetitcopenapi-qa 三 server，整库只读不设 ALLOW_TABLES）替代；skyeye_query_log 的 guideMd
+  重写为 MCP 工具链纪律（projectPath 逐字取自速查表、SELECT 必须自带 LIMIT≤50、PII 掩码
+  下放给模型），经 PATCH /api/admin/tools/6 生效（2026-09-14）
 - **【迭代7 实证】** skyeye queryLog CLI 会**静默丢弃未知 flag** 并降级默认 15 分钟窗
   （`--startTime` 拼错 → success=true 假空命中），故 argv 白名单必须在脚本层前置拦截；
   `部分应用查询失败,失败应用参数信息=[...]` 单句文案两成因（简称 uk vs uk 数过多），

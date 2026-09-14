@@ -1,5 +1,11 @@
 # code_lookup 使用指南（外部业务仓只读代码定位）
 
+> **已下线（迭代7.2，2026-09-14）**：DB `enabled=false`，不再挂载给模型。
+> 能力由 **codegraph MCP**（`codegraph_codegraph_explore`）替代，配置见 `application-local.yml`。
+> 本文件仅作回滚参考，如需恢复：PATCH `/api/admin/tools/{id}` 置 `enabled=true` 并同步恢复 `guideMd`。
+
+---
+
 按 `uk` 定位到本机检出的业务仓（config.json 的 `code_root`，可选 `code_include` 收窄 module），
 只读，不写文件、不执行代码。所有路径经 canonical 校验锁在 code_root 内。
 

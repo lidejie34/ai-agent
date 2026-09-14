@@ -56,39 +56,75 @@
 - ERROR/WARN 在 `level` 字段；msg 里带 `...[msg 截断...]` 表示原文更长。
 - 命中 SQL/MQ 里出现业务号只是**几百个 IN 值之一**时，不算本次链路证据。
 
+## 排障工具链：代码定位与数据旁证（MCP 工具）
+
+日志锁定嫌疑 uk/异常后，按需要用以下 MCP 工具。**两者都只是旁证**；日志与代码/库矛盾时列入"待确认点"，不直接当根因。
+
+### 代码定位：`codegraph_codegraph_explore`
+
+- **硬触发**：用户问"在哪里调用/哪段代码/定位到代码位置/调用链路怎么走"这类代码位置问题时，
+  **必须先调本工具核实**，再下代码结论。日志里出现的类名/文件名/方法名只准当作 `query` 输入，
+  **禁止仅凭日志（或知识库文档）直接给出"代码在某类某文件"的结论**——那是未验证的猜测。
+- **知识库冲突规则**：RAG 注入的知识库文档（如 Provider.md）是文档级描述，可能与真实代码漂移；
+  文档描述与本工具实查结果冲突时，**一律以实查为准**，并在回复里说明差异。
+- 必传 `projectPath` + `query`。`projectPath` **必须且只能**从下方 UK 速查表按「用户询问的 uk」
+  **所在行**的「代码仓 projectPath」列逐字复制；**知识库文档、日志包名、你自己的推测给出的任何路径，
+  一律不得作为 projectPath**（那些只是线索，不是工具输入）。
+- 常见坑：`pms-openapi-switch` 仓的代码包名是 `com.ly.titc.pms.openapi.sw.*`——包名里含 "pms.openapi"
+  **不代表**该去 pms-openapi 仓查；uk 是 `titc.java.pms.openapi.switch` 就必须用 switch 行的路径。
+- query 用词优先级：栈里 **FQCN+行号** > 异常类名 > 日志关键文案。一次调用即返回相关符号源码+调用链，
+  不要再用 grep/读文件重复验证其返回。
+- **若返回提示该路径没有 .codegraph 索引**：说明该仓未建索引，**必须告知用户**需要在终端执行
+  `codegraph init <projectPath>` 后才能用代码定位（或本次跳过代码阶段继续日志分析）；
+  **不要编造代码结论，也不要改用知识库文档里的路径/内容代替实查**。
+  当前已建索引（2026-09-14）：`/Users/lidejie/tc/lvzhi/pms-openapi-switch`；
+  `/Users/lidejie/tc/lvzhi/openapi`（Maven 多模块根，覆盖 pms-openapi/supplier-openapi/drp-openapi 等子模块——
+  实测 projectPath 传其子目录路径同样命中根索引，速查表对应行直接用即可）。
+- 跨 uk 链路：每个 uk 对应该行自己的 projectPath，分仓分别调用。
+
+### 数据旁证：`<库>_mysql_query`（仅 QA，只读）
+
+- 按 uk 的「数据库」列选工具：`tetitcdrp_qa_mysql_query`（TETitcDRP）/
+  `tetitcdrporder_qa_mysql_query`（TETitcDrpOrder）/ `tetitcopenapi_qa_mysql_query`（TETitcOpenAPI）。
+- **只写 SELECT，且必须自带 `LIMIT ≤ 50`**（不再有工具层硬顶）；单表等值条件优先，避免大 JOIN/全表扫。
+- 表/列不存在（1146/1054）通常是 QA 环境与代码版本差，如实说明，不要换名猜测反复试。
+- 结构性确认可用同 server 的 `describe_table`；不要导出 CSV。
+
 ## 回复纪律
 
 - 默认给**信号级时间线**：`<time> - <uk> - <关键摘要>`，只收 ERROR + 入口 + 抛异常点 + 关键状态转换；
   用户说"完整时间线"才全量列出。
-- 代码关联交给 `code_lookup`：优先栈里 FQCN+行号，其次异常类名，最后日志文案。
-- 数据核对交给 `qa_db_query`（仅 qa），库结果只是旁证；日志与库矛盾列入"待确认点"，不直接当根因。
 - 推测与事实分开写；没证据不要把根因说成确定事实。
-- 转述日志/库数据时手机号、身份证号要掩码。
+- 转述日志/库数据时**手机号、身份证号必须自行掩码**（工具层不再统一掩码）。
+- **跨轮记忆纪律**：工具（日志/代码/库）的返回内容**不会带入下一轮对话**——下一轮你能看到的
+  只有你自己写出的回答正文。所以每轮回复必须把后续追问可能要用的关键证据写进正文：
+  contextId、关键时间点、异常类名+文案原文、作为结论依据的日志行、查过的代码位置/表名+关键行值。
+  没写进正文的证据，下一轮就等于没查到；用户说"结合刚才的日志/代码"时你只能依赖这些正文记录。
 
-## UK 速查表（简称 → 完整 appUk，工具已自动解析，歧义仍需回问）
+## UK 速查表（简称 → 完整 appUk / 代码仓 / 数据库；简称歧义仍需回问）
 
-| 简称/线索 | 完整 appUk | 说明 |
-|---|---|---|
-| drp.switch / OTA开关 | titc.java.drp.switch | OTA渠道入口 drp-restapi-switch |
-| drp.openapi / open | titc.java.drp.openapi | OTA渠道入口 drp-restapi-open |
-| dsf.drp.order / drp-order | titc.java.dsf.drp.order | 订单 dsf |
-| drp.order.job | titc.java.drp.order.job | 订单 job |
-| dsf.drp / drp-dsf | titc.java.dsf.drp | drp.dsf |
-| drp.ms | titc.java.drp.ms | drp.ms |
-| drp.job（枢纽，9+ 邻居） | titc.java.drp.job | drp.job |
-| workbench.gateway | titc.java.drp.workbench.gateway | 工作台网关 |
-| ihotel.ms | digaiempower.java.drp.ihotel.ms | ihotel |
-| pms.dsf | digaiempower.dsf.java.dsf.drp.pms | drp.pms.dsf |
-| dsf.external | digaiempower.dsf.java.dsf.drp.external | drp.dsf.external |
-| cloud.pms.pull.job | titc.java.drp.cloud.pms.pull.job | PMS 拉取 |
-| alitrip/ctrip/douyin/jd/meituan/standard/te push.job | titc.java.drp.<渠道>.push.job | 各 OTA 推送 job |
-| pms.push.job | titc.java.pms.push.job | 开放平台推送 |
-| supplier.openapi | titc.java.supplier.openapi | 供应商开放平台 |
-| pms.openapi | titc.java.pms.openapi | 开放平台 |
-| 开放平台 switch | titc.java.pms.openapi.switch | 注意与 OTA switch 区分 |
-| dubbo.pms.order | titc.java.dubbo.pms.order | pms 订单 dubbo |
-| cdm / core.data | titc.java.dubbo.core.data | 核心基础数据（appUk 与仓名无字面关系） |
-| core.data.job | titc.java.core.data.job | cdm job |
-| pms.account | titc.java.dubbo.pms.account | pms 账户 |
-| pms.bridge.order | titc.java.pms.bridge.order | pms bridge 订单 |
-| pms.bridge.data | titc.java.pms.bridge.data | pms bridge 数据 |
+| 简称/线索 | 完整 appUk | 代码仓 projectPath | 数据库 |
+|---|---|---|---|
+| drp.switch / OTA开关 | titc.java.drp.switch | /Users/lidejie/tc/lvzhi/drp-restapi/drp-restapi-switch | — |
+| drp.openapi / open | titc.java.drp.openapi | /Users/lidejie/tc/lvzhi/drp-restapi/drp-restapi-open | — |
+| dsf.drp.order / drp-order | titc.java.dsf.drp.order | /Users/lidejie/tc/lvzhi/drp-order/drp-order-dsf | tetitcdrporder_qa |
+| drp.order.job | titc.java.drp.order.job | /Users/lidejie/tc/lvzhi/drp-order/drp-order-job | tetitcdrporder_qa |
+| dsf.drp / drp-dsf | titc.java.dsf.drp | /Users/lidejie/tc/lvzhi/drp/drp-dsf | tetitcdrp_qa |
+| drp.ms | titc.java.drp.ms | /Users/lidejie/tc/lvzhi/drp/drp-ms | tetitcdrp_qa |
+| drp.job（枢纽，9+ 邻居） | titc.java.drp.job | /Users/lidejie/tc/lvzhi/drp/drp-job | tetitcdrp_qa |
+| workbench.gateway | titc.java.drp.workbench.gateway | /Users/lidejie/tc/lvzhi/drp/drp-workbench-gateway | tetitcdrp_qa |
+| ihotel.ms | digaiempower.java.drp.ihotel.ms | /Users/lidejie/tc/lvzhi/drp/drp-ihotel-pms | tetitcdrp_qa |
+| pms.dsf | digaiempower.dsf.java.dsf.drp.pms | /Users/lidejie/tc/lvzhi/drp/drp-pms-dsf | tetitcdrp_qa |
+| dsf.external | digaiempower.dsf.java.dsf.drp.external | /Users/lidejie/tc/lvzhi/drp/drp-dsf-external | tetitcdrp_qa |
+| cloud.pms.pull.job | titc.java.drp.cloud.pms.pull.job | /Users/lidejie/tc/lvzhi/drp-pull/drp-cloud-pms-pull-job | tetitcdrp_qa |
+| alitrip/ctrip/douyin/jd/meituan/standard/te push.job | titc.java.drp.<渠道>.push.job | /Users/lidejie/tc/lvzhi/drp-push/drp-<渠道>-push-job | — |
+| pms.push.job | titc.java.pms.push.job | /Users/lidejie/tc/lvzhi/pms-push/pms-push-job | — |
+| supplier.openapi | titc.java.supplier.openapi | /Users/lidejie/tc/lvzhi/openapi/supplier-openapi | — |
+| pms.openapi | titc.java.pms.openapi | /Users/lidejie/tc/lvzhi/openapi/pms-openapi | — |
+| 开放平台 switch | titc.java.pms.openapi.switch（注意与 OTA switch 区分） | /Users/lidejie/tc/lvzhi/pms-openapi-switch（已建索引） | tetitcopenapi_qa |
+| dubbo.pms.order | titc.java.dubbo.pms.order | /Users/lidejie/tc/lvzhi/pms-order/pms-order-dubbo-provider | — |
+| cdm / core.data | titc.java.dubbo.core.data（appUk 与仓名无字面关系） | /Users/lidejie/tc/lvzhi/cdm | — |
+| core.data.job | titc.java.core.data.job | /Users/lidejie/tc/lvzhi/cdm | — |
+| pms.account | titc.java.dubbo.pms.account | /Users/lidejie/tc/lvzhi/pms-account/pms-account-dubbo-provider | — |
+| pms.bridge.order | titc.java.pms.bridge.order | /Users/lidejie/tc/lvzhi/pms-bridge/pms-bridge-order | — |
+| pms.bridge.data | titc.java.pms.bridge.data | /Users/lidejie/tc/lvzhi/pms-bridge/pms-bridge-data | — |

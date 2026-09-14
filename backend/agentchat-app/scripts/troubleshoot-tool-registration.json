@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "迭代7 排障三件套交付登记清单。tools[].body 即管理端 ToolUpsertRequest（fastjson2 record，null 字段省略）；guideMd 的 {$guideFile} 占位在登记时替换为 scripts/guides/ 下对应文件全文。skyeye_query_log 为既有行 PATCH（id 以实际 /api/admin/tools 查询为准），其余两件 POST 新建。登记后可在管理端工具页核对，勿手工 INSERT。",
+  "note": "迭代7 排障三件套交付登记清单（迭代7.2 更新：code_lookup / qa_db_query 两个 SCRIPT 工具已于 2026-09-14 下线——DB enabled=false，能力由 codegraph MCP + easy-mysql-mcp（tetitcdrp-qa/tetitcdrporder-qa/tetitcopenapi-qa）替代，替代项不在本文件登记，配置见 application-local.yml 的 app.tools.mcp.servers；本文件保留两份旧登记仅作回滚参考，guides/code-lookup-guide.md、guides/qa-db-query-guide.md 同步标记下线）。tools[].body 即管理端 ToolUpsertRequest（fastjson2 record，null 字段省略）；guideMd 的 {$guideFile} 占位在登记时替换为 scripts/guides/ 下对应文件全文。skyeye_query_log 为既有行 PATCH（id 以实际 /api/admin/tools 查询为准）。登记后可在管理端工具页核对，勿手工 INSERT。",
   "tools": [
     {
       "action": "PATCH",
@@ -40,7 +40,8 @@
       }
     },
     {
-      "action": "POST",
+      "action": "DEPRECATED",
+      "_deprecated": "迭代7.2（2026-09-14）：DB enabled=false，能力由 codegraph MCP（codegraph_codegraph_explore）替代；脚本/指南保留作回滚参考",
       "name": "code_lookup",
       "body": {
         "name": "code_lookup",
@@ -49,7 +50,7 @@
         "handlerConfig": { "script": "code_lookup.sh" },
         "timeoutMs": 15000,
         "outputMaxChars": 30000,
-        "enabled": true,
+        "enabled": false,
         "guideMd": { "$guideFile": "guides/code-lookup-guide.md" },
         "inputSchema": {
           "type": "object",
@@ -66,7 +67,8 @@
       }
     },
     {
-      "action": "POST",
+      "action": "DEPRECATED",
+      "_deprecated": "迭代7.2（2026-09-14）：DB enabled=false，能力由 easy-mysql-mcp（tetitcdrp-qa/tetitcdrporder-qa/tetitcopenapi-qa，整库只读）替代；脚本/指南保留作回滚参考",
       "name": "qa_db_query",
       "body": {
         "name": "qa_db_query",
@@ -75,7 +77,7 @@
         "handlerConfig": { "script": "qa_db_query.sh" },
         "timeoutMs": 30000,
         "outputMaxChars": 20000,
-        "enabled": true,
+        "enabled": false,
         "guideMd": { "$guideFile": "guides/qa-db-query-guide.md" },
         "inputSchema": {
           "type": "object",
