@@ -1,5 +1,6 @@
 package com.dj.ai.agentchat.orchestration;
 
+import com.dj.ai.agentchat.observability.ObservabilityProperties;
 import com.dj.ai.agentchat.orchestration.audit.OrchestrationAuditService;
 import com.dj.ai.agentchat.orchestration.audit.OrchestrationSchemaInitializer;
 import com.dj.ai.agentchat.orchestration.audit.mapper.OrchestrationRunMapper;
@@ -8,9 +9,11 @@ import com.dj.ai.agentchat.orchestration.planner.PlannerClient;
 import com.dj.ai.agentchat.orchestration.support.ModelInvoker;
 import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
 import com.dj.ai.agentchat.tool.security.SecretRedactor;
+import io.micrometer.context.ContextExecutorService;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -66,19 +69,26 @@ public class SddRuntimeConfig {
     /**
      * 编排状态机线程池（T3/T4）：daemon cached 池，Flux.create + subscribeOn 驱动
      * Planner/Executor 同步循环；不占用 Web 容器/Reactor 线程，空闲回收、随 JVM 退出。
+     * 迭代9：可观测性总开关开启时包裹 ContextExecutorService（MDC 跨池传递）；
+     * 关闭态返回原始池，行为与迭代8 逐字节一致。
      */
     @Bean(destroyMethod = "shutdown")
-    public ExecutorService sddOrchestrator() {
-        return Executors.newCachedThreadPool(daemonThreadFactory("sdd-orchestrator"));
+    public ExecutorService sddOrchestrator(
+            @Value("${app.observability.enabled:false}") boolean observabilityEnabled) {
+        ExecutorService pool = Executors.newCachedThreadPool(daemonThreadFactory("sdd-orchestrator"));
+        return observabilityEnabled ? ContextExecutorService.wrap(pool) : pool;
     }
 
     /**
      * 模型调用线程池（T3）：Planner/Executor 同步 .call() 在此执行，编排线程以
      * Future.get(剩余预算/单任务超时) 强时限等待；超时 cancel(true) best-effort 中断。
+     * 迭代9：同 sddOrchestrator 的可观测性条件包裹。
      */
     @Bean(destroyMethod = "shutdown")
-    public ExecutorService sddModelCallPool() {
-        return Executors.newCachedThreadPool(daemonThreadFactory("sdd-model-call"));
+    public ExecutorService sddModelCallPool(
+            @Value("${app.observability.enabled:false}") boolean observabilityEnabled) {
+        ExecutorService pool = Executors.newCachedThreadPool(daemonThreadFactory("sdd-model-call"));
+        return observabilityEnabled ? ContextExecutorService.wrap(pool) : pool;
     }
 
     /** 同步模型调用统一超时包装（持 sdd-model-call 池）。 */
@@ -87,18 +97,21 @@ public class SddRuntimeConfig {
         return new ModelInvoker(sddModelCallPool);
     }
 
-    /** Planner 角色 Client（路由/再规划/汇总）。 */
+    /** Planner 角色 Client（路由/再规划/汇总）；迭代9 传入可观测性 properties（caller 标注门控）。 */
     @Bean
     public PlannerClient plannerClient(ChatClient chatClient,
                                        SddProperties properties,
                                        ModelInvoker sddModelInvoker,
-                                       OrchestrationAuditService orchestrationAuditService) {
-        return new PlannerClient(chatClient, properties, sddModelInvoker, orchestrationAuditService);
+                                       OrchestrationAuditService orchestrationAuditService,
+                                       ObservabilityProperties observabilityProperties) {
+        return new PlannerClient(chatClient, properties, sddModelInvoker, orchestrationAuditService,
+                observabilityProperties);
     }
 
     /**
      * Executor 角色 Client；SecretRedactor 缺席（工具开关关闭）时仅长度截断兜底；
      * RagAdvisor 缺席（app.rag.enabled=false）时 Executor 请求不挂载知识库检索。
+     * 迭代9 传入可观测性 properties（caller 标注门控）。
      */
     @Bean
     public ExecutorClient executorClient(ChatClient chatClient,
@@ -106,9 +119,11 @@ public class SddRuntimeConfig {
                                          ModelInvoker sddModelInvoker,
                                          OrchestrationAuditService orchestrationAuditService,
                                          ObjectProvider<SecretRedactor> redactorProvider,
-                                         ObjectProvider<RagAdvisor> ragAdvisorProvider) {
+                                         ObjectProvider<RagAdvisor> ragAdvisorProvider,
+                                         ObservabilityProperties observabilityProperties) {
         return new ExecutorClient(chatClient, properties, sddModelInvoker,
-                orchestrationAuditService, redactorProvider.getIfAvailable(), ragAdvisorProvider);
+                orchestrationAuditService, redactorProvider.getIfAvailable(), ragAdvisorProvider,
+                observabilityProperties);
     }
 
     /**

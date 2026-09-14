@@ -1,7 +1,29 @@
 server:
   port: 8080
 
+# ---- 迭代9：actuator 端点暴露面（R-2）----
+management:
+  endpoints:
+    web:
+      # 发现页（/actuator 根链接页）默认关闭：实证该页不受 exposure 白名单收口——开启时即使
+      # 白名单零端点，/actuator 仍返回 200 空链接页，与引入 actuator 前的「未知路径」语义不一致。
+      discovery:
+        enabled: ${APP_OBSERVABILITY_ACTUATOR_DISCOVERY_ENABLED:false}
+      exposure:
+        # actuator Web 暴露白名单。【实证（构建期清单 #4）】空串会被绑定为「未设置」而回落
+        # Boot 默认（web=health、jmx=*），故默认收窄必须用不存在的占位端点 id
+        # （匹配不到任何端点 = 零暴露，/actuator/** 走未知路径语义，与引入前一致，R-2/AC-1）。
+        # 开启可观测性时在 local yml 或 APP_OBSERVABILITY_ACTUATOR_INCLUDE=health,metrics,slowrequests 覆盖。
+        include: ${APP_OBSERVABILITY_ACTUATOR_INCLUDE:observability-none}
+    jmx:
+      exposure:
+        # JMX 默认 * 同样收窄为零（不引入 actuator 前无 JMX 端点，暴露面不扩大；占位 id 同 web）。
+        include: ${APP_OBSERVABILITY_ACTUATOR_JMX_INCLUDE:observability-none}
+
 logging:
+  pattern:
+    # 默认 %5p = Boot 内建默认（逐字节不变）；开启 traceId 日志字段时 local yml 覆盖为 "%5p [%X{traceId}]"
+    level: ${APP_LOG_PATTERN_LEVEL:%5p}
   level:
     # 本工程日志级别：info=请求/耗时/异常摘要；debug=额外打印消息内容与 SSE 每个片段
     # 可用环境变量覆盖：APP_LOG_LEVEL=debug
@@ -274,3 +296,16 @@ app:
   # token 空白=未配置 → 管理端一律 503 ADMIN_NOT_CONFIGURED；仅 env / application-local.yml 注入，不入库。
   admin:
     token: ${APP_ADMIN_TOKEN:}
+
+  # ---- 迭代9：可观测性（traceId / token 用量 / 模型耗时指标 / 慢请求清单）----
+  # 总开关默认 false：关闭时零装配、actuator 端点零暴露（见 management 块），行为与迭代8 逐字节一致。
+  observability:
+    enabled: ${APP_OBSERVABILITY_ENABLED:false}
+    slow-request:
+      # HTTP 请求级慢请求阈值（SSE=订阅到流结束）；≤0 = 不记录
+      threshold-ms: ${APP_OBSERVABILITY_SLOW_THRESHOLD_MS:30000}
+      # 有界内存环形清单容量（重启丢失，本地自用）
+      capacity: ${APP_OBSERVABILITY_SLOW_CAPACITY:100}
+    # 流式 token 实证子开关（R-1）：true 时流式请求带 stream_options.include_usage，
+    # 方舟不认/报错则保持 false——拿不到 usage 时行为=显式 unavailable 降级，不做本地估算
+    stream-usage-enabled: ${APP_OBSERVABILITY_STREAM_USAGE_ENABLED:false}

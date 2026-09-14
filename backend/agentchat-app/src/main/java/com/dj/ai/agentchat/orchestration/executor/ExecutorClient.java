@@ -2,6 +2,8 @@ package com.dj.ai.agentchat.orchestration.executor;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
+import com.dj.ai.agentchat.observability.ObservabilityMetricsAdvisor;
+import com.dj.ai.agentchat.observability.ObservabilityProperties;
 import com.dj.ai.agentchat.orchestration.SddProperties;
 import com.dj.ai.agentchat.orchestration.audit.OrchestrationAuditService;
 import com.dj.ai.agentchat.orchestration.planner.PlannerClient;
@@ -67,19 +69,43 @@ public class ExecutorClient {
      */
     @Nullable
     private final ObjectProvider<RagAdvisor> ragAdvisorProvider;
+    /**
+     * 可观测性配置（迭代9）：enabled=false（默认关）时不注入 caller advisor param，
+     * 请求形态与迭代8 逐字节一致（AC-7）。properties 无条件绑定恒在场。
+     */
+    private final ObservabilityProperties observabilityProperties;
 
+    /**
+     * 迭代9 起装配构造（7 参）：末参为容器内 {@link ObservabilityProperties}。
+     */
     public ExecutorClient(ChatClient chatClient,
                           SddProperties props,
                           ModelInvoker modelInvoker,
                           OrchestrationAuditService audit,
                           @Nullable SecretRedactor redactor,
-                          @Nullable ObjectProvider<RagAdvisor> ragAdvisorProvider) {
+                          @Nullable ObjectProvider<RagAdvisor> ragAdvisorProvider,
+                          ObservabilityProperties observabilityProperties) {
         this.chatClient = chatClient;
         this.props = props;
         this.modelInvoker = modelInvoker;
         this.audit = audit;
         this.redactor = redactor;
         this.ragAdvisorProvider = ragAdvisorProvider;
+        this.observabilityProperties = observabilityProperties;
+    }
+
+    /**
+     * 迭代8 前既有 6 参构造：委托 7 参主构造，observability properties 传默认关闭实例
+     * （ExecutorClientTest 等既有直调零改动，关闭态请求形态逐字节回归）。
+     */
+    public ExecutorClient(ChatClient chatClient,
+                          SddProperties props,
+                          ModelInvoker modelInvoker,
+                          OrchestrationAuditService audit,
+                          @Nullable SecretRedactor redactor,
+                          @Nullable ObjectProvider<RagAdvisor> ragAdvisorProvider) {
+        this(chatClient, props, modelInvoker, audit, redactor, ragAdvisorProvider,
+                new ObservabilityProperties());
     }
 
     /**
@@ -110,6 +136,10 @@ public class ExecutorClient {
                     spec.advisors(ragAdvisor);
                 }
                 PlannerClient.applyRoleOptions(spec, props.getExecutor());
+                // 迭代9：可观测性开启时标注调用点 caller=executor（关闭态不注入，请求形态不变）
+                if (observabilityProperties != null && observabilityProperties.isEnabled()) {
+                    spec.advisors(a -> a.param(ObservabilityMetricsAdvisor.PARAM_CALLER, "executor"));
+                }
                 return spec.call().chatResponse();
             }, timeoutNanos);
             long durationMs = elapsedMillis(start);

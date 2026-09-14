@@ -1,5 +1,7 @@
 package com.dj.ai.agentchat.orchestration.planner;
 
+import com.dj.ai.agentchat.observability.ObservabilityMetricsAdvisor;
+import com.dj.ai.agentchat.observability.ObservabilityProperties;
 import com.dj.ai.agentchat.orchestration.SddProperties;
 import com.dj.ai.agentchat.orchestration.audit.OrchestrationAuditService;
 import com.dj.ai.agentchat.orchestration.support.ModelInvoker;
@@ -44,15 +46,36 @@ public class PlannerClient {
     private final SddProperties props;
     private final ModelInvoker modelInvoker;
     private final OrchestrationAuditService audit;
+    /**
+     * 可观测性配置（迭代9）：enabled=false（默认关）时不注入 caller advisor param，
+     * 请求形态与迭代8 逐字节一致（AC-7）。properties 无条件绑定恒在场。
+     */
+    private final ObservabilityProperties observabilityProperties;
 
+    /**
+     * 迭代9 起装配构造（5 参）：末参为容器内 {@link ObservabilityProperties}。
+     */
     public PlannerClient(ChatClient chatClient,
                          SddProperties props,
                          ModelInvoker modelInvoker,
-                         OrchestrationAuditService audit) {
+                         OrchestrationAuditService audit,
+                         ObservabilityProperties observabilityProperties) {
         this.chatClient = chatClient;
         this.props = props;
         this.modelInvoker = modelInvoker;
         this.audit = audit;
+        this.observabilityProperties = observabilityProperties;
+    }
+
+    /**
+     * 迭代8 前既有 4 参构造：委托 5 参主构造，observability properties 传默认关闭实例
+     * （PlannerClientTest 等既有直调零改动，关闭态请求形态逐字节回归）。
+     */
+    public PlannerClient(ChatClient chatClient,
+                         SddProperties props,
+                         ModelInvoker modelInvoker,
+                         OrchestrationAuditService audit) {
+        this(chatClient, props, modelInvoker, audit, new ObservabilityProperties());
     }
 
     /**
@@ -164,6 +187,8 @@ public class PlannerClient {
                     .system(system)
                     .messages(messages);
             applyRoleOptions(spec, props.getPlanner());
+            // 迭代9：可观测性开启时标注调用点 caller=synth（关闭态不注入，请求形态不变）
+            applyCallerParam(spec, "synth");
             return spec.stream().content()
                     .doOnComplete(() -> audit.record(ctx.runId(), ctx.sessionId(), ctx.round(),
                             OrchestrationAuditService.ROLE_SYNTH, null, null,
@@ -185,9 +210,21 @@ public class PlannerClient {
                     .system(resolveSystemPrompt(props.getPlanner(), SddPrompts.PLANNER_DEFAULT_SYSTEM))
                     .messages(assembleMessages(ctx.history(), userText));
             applyRoleOptions(spec, props.getPlanner());
+            // 迭代9：可观测性开启时标注调用点 caller=planner（路由/再规划共用）
+            applyCallerParam(spec, "planner");
             ChatResponse response = spec.call().chatResponse();
             return new CallResult(extractText(response), resolveModel(response));
         }, timeoutNanos);
+    }
+
+    /**
+     * caller advisor param 注入（迭代9）：仅可观测性总开关开启时调用
+     * {@code .advisors(param)}——关闭态请求形态与迭代8 逐字节一致（AC-7）。
+     */
+    private void applyCallerParam(ChatClient.ChatClientRequestSpec spec, String caller) {
+        if (observabilityProperties != null && observabilityProperties.isEnabled()) {
+            spec.advisors(a -> a.param(ObservabilityMetricsAdvisor.PARAM_CALLER, caller));
+        }
     }
 
     private record CallResult(String text, String model) {

@@ -6,6 +6,7 @@ import com.dj.ai.agentchat.dto.ChatResponse;
 import com.dj.ai.agentchat.dto.SessionEvent;
 import com.dj.ai.agentchat.dto.StreamChunk;
 import com.dj.ai.agentchat.exception.GlobalExceptionHandler;
+import com.dj.ai.agentchat.observability.SlowRequestTracker;
 import com.dj.ai.agentchat.orchestration.OrchEventBridge;
 import com.dj.ai.agentchat.orchestration.frame.PlanFrame;
 import com.dj.ai.agentchat.orchestration.frame.TaskFrame;
@@ -15,7 +16,10 @@ import com.dj.ai.agentchat.sse.ScheduledHeartbeat;
 import com.dj.ai.agentchat.sse.SseHeartbeatScheduler;
 import com.dj.ai.agentchat.tool.dto.ToolEventFrame;
 import com.dj.ai.agentchat.tool.support.ToolCallBridge;
+import com.dj.ai.agentchat.util.TraceIds;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.lang.Nullable;
@@ -29,6 +33,7 @@ import reactor.core.publisher.Flux;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -53,35 +58,72 @@ public class ChatController {
     private final String heartbeatText;
     @Nullable
     private final SseHeartbeatScheduler heartbeatScheduler;
+    /**
+     * 慢请求环形清单（迭代9 FR-4）：可观测性总开关关闭时无 bean → null →
+     * 全部记录点零开销零行为（关闭态与迭代8 逐字节一致）。
+     */
+    @Nullable
+    private final SlowRequestTracker slowRequestTracker;
 
+    /**
+     * 迭代9 起 @Autowired 主构造（7 参）：末参 {@code ObjectProvider<SlowRequestTracker>}
+     * 条件解析（开关关闭 → null）。
+     */
+    @Autowired
     public ChatController(ChatService chatService,
                           @Value("${app.chat.sse-timeout-ms:120000}") long sseTimeoutMs,
                           @Value("${app.chat.heartbeat.enabled:true}") boolean heartbeatEnabled,
                           @Value("${app.chat.heartbeat.interval:15s}") Duration heartbeatInterval,
                           @Value("${app.chat.heartbeat.text:keepalive}") String heartbeatText,
-                          @Nullable SseHeartbeatScheduler heartbeatScheduler) {
+                          @Nullable SseHeartbeatScheduler heartbeatScheduler,
+                          ObjectProvider<SlowRequestTracker> slowRequestTrackerProvider) {
         this.chatService = chatService;
         this.sseTimeoutMs = sseTimeoutMs;
         this.heartbeatEnabled = heartbeatEnabled;
         this.heartbeatInterval = heartbeatInterval;
         this.heartbeatText = heartbeatText;
         this.heartbeatScheduler = heartbeatScheduler;
+        this.slowRequestTracker = slowRequestTrackerProvider == null
+                ? null : slowRequestTrackerProvider.getIfAvailable();
+    }
+
+    /**
+     * 迭代8 前既有 6 参构造（非 @Autowired 便捷构造）：委托 7 参主构造，tracker provider
+     * 传 null（无慢请求记录）——SseHeartbeatTest 等既有直调零改动，关闭态逐字节回归。
+     */
+    public ChatController(ChatService chatService,
+                          long sseTimeoutMs,
+                          boolean heartbeatEnabled,
+                          Duration heartbeatInterval,
+                          String heartbeatText,
+                          @Nullable SseHeartbeatScheduler heartbeatScheduler) {
+        this(chatService, sseTimeoutMs, heartbeatEnabled, heartbeatInterval, heartbeatText,
+                heartbeatScheduler, null);
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ChatResponse chat(@RequestBody ChatRequest request) {
         long start = System.currentTimeMillis();
+        // 迭代9：traceId 于方法头取一次（关闭态 MDC 空 → null → 记录点零行为）
+        String traceId = TraceIds.current();
         int historySize = request.history() == null ? 0 : request.history().size();
         int messageLength = request.message() == null ? 0 : request.message().length();
         log.info("收到同步对话请求: message长度={}, history条数={}", messageLength, historySize);
         log.debug("同步对话请求内容: {}", request.message());
 
-        ChatResponse response = chatService.chat(request);
+        ChatResponse response;
+        try {
+            response = chatService.chat(request);
+        } catch (RuntimeException e) {
+            recordSlow(traceId, "/api/chat", start, "error");
+            throw e;
+        }
 
         long elapsed = System.currentTimeMillis() - start;
         int replyLength = response.reply() == null ? 0 : response.reply().length();
         log.info("同步对话完成: model={}, 回复长度={}, 耗时={}ms", response.model(), replyLength, elapsed);
         log.debug("同步对话回复内容: {}", response.reply());
+        recordSlow(traceId, "/api/chat", start, "done");
         return response;
     }
 
@@ -90,6 +132,10 @@ public class ChatController {
             produces = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8")
     public SseEmitter chatStream(@RequestBody ChatRequest request) {
         long start = System.currentTimeMillis();
+        // 迭代9：traceId/start/slowRecorded 于装配段捕获为 final 局部——
+        // 终止回调跑在别的线程，不依赖回调线程的 MDC（关闭态 traceId=null → 记录零行为）
+        String traceId = TraceIds.current();
+        AtomicBoolean slowRecorded = new AtomicBoolean(false);
         int historySize = request.history() == null ? 0 : request.history().size();
         int messageLength = request.message() == null ? 0 : request.message().length();
         log.info("收到SSE流式对话请求: message长度={}, history条数={}, 超时={}ms",
@@ -106,17 +152,19 @@ public class ChatController {
             result = chatService.chatStream(request);
         } catch (RuntimeException e) {
             // 缺 Key / 参数错误 / 记忆不可用等订阅前同步失败：转 error 事件后关闭，不挂起
+            // （耗时极短不可能超慢请求阈值，不记录）
             log.warn("SSE流式对话订阅前失败: {}", e.getMessage());
             sendErrorAndComplete(emitter, e);
             return emitter;
         }
 
         // 记忆路径：记忆阶段已成功，在首个 message 帧（及心跳）之前回传会话 ID（FR-5/AC-4）。
+        // 迭代9：session 帧附 traceId（关闭态 null → fastjson2 省键，帧字节与迭代8 一致）。
         // 发送失败（客户端已断）→ completeWithError 已触发清理回调，直接返回
         if (result.sessionId() != null) {
             boolean sent = sendEvent(emitter, SseEmitter.event()
                     .name("session")
-                    .data(new SessionEvent(result.sessionId()), MediaType.APPLICATION_JSON));
+                    .data(new SessionEvent(result.sessionId(), traceId), MediaType.APPLICATION_JSON));
             if (!sent) {
                 return emitter;
             }
@@ -176,6 +224,7 @@ public class ChatController {
                 error -> {
                     log.warn("SSE流式对话异常: 已推送片段数={}, 耗时={}ms, 原因={}",
                             chunkCount.get(), System.currentTimeMillis() - start, error.getMessage());
+                    recordSlowOnce(slowRecorded, traceId, "/api/chat/stream", start, "error");
                     detachAll(toolBridge, orchBridge);
                     sendErrorAndComplete(emitter, error);
                     cancelHeartbeat(heartbeat);
@@ -183,6 +232,7 @@ public class ChatController {
                 () -> {
                     log.info("SSE流式对话完成: 推送片段数={}, 耗时={}ms",
                             chunkCount.get(), System.currentTimeMillis() - start);
+                    recordSlowOnce(slowRecorded, traceId, "/api/chat/stream", start, "done");
                     detachAll(toolBridge, orchBridge);
                     sendEvent(emitter, SseEmitter.event().name("done").data("[DONE]"));
                     emitter.complete();
@@ -193,6 +243,7 @@ public class ChatController {
         emitter.onTimeout(() -> {
             log.warn("SSE流式对话超时: 已推送片段数={}, 耗时={}ms",
                     chunkCount.get(), System.currentTimeMillis() - start);
+            recordSlowOnce(slowRecorded, traceId, "/api/chat/stream", start, "timeout");
             detachAll(toolBridge, orchBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
@@ -200,6 +251,7 @@ public class ChatController {
         });
         emitter.onError(t -> {
             log.debug("SSE连接异常（客户端可能已断开）: {}", t.getMessage());
+            recordSlowOnce(slowRecorded, traceId, "/api/chat/stream", start, "cancel");
             detachAll(toolBridge, orchBridge);
             cancelHeartbeat(heartbeat);
             subscription.dispose();
@@ -224,6 +276,31 @@ public class ChatController {
         }
         if (orchBridge != null) {
             orchBridge.detach();
+        }
+    }
+
+    // ---- 慢请求记录（迭代9 FR-4） ----
+
+    /**
+     * 慢请求记录点（同步路径）：tracker 缺席（开关关闭）或 traceId 为空（非请求线程/
+     * 关闭态 MDC 空）时直接返回——关闭态零开销零行为。
+     */
+    private void recordSlow(@Nullable String traceId, String path, long startMs, String outcome) {
+        if (slowRequestTracker == null || traceId == null) {
+            return;
+        }
+        slowRequestTracker.recordIfSlow(traceId, path,
+                System.currentTimeMillis() - startMs, outcome);
+    }
+
+    /**
+     * SSE 终止路径慢请求记录：AtomicBoolean CAS 保证只记首次终态
+     * （done/error/timeout/cancel 互斥；onCompletion 不再记录——complete 前必已有终态）。
+     */
+    private void recordSlowOnce(AtomicBoolean slowRecorded, @Nullable String traceId,
+                                String path, long startMs, String outcome) {
+        if (slowRecorded.compareAndSet(false, true)) {
+            recordSlow(traceId, path, startMs, outcome);
         }
     }
 

@@ -82,15 +82,22 @@ public class ToolRuntimeConfig {
     /**
      * 工具专用执行池（S5）：daemon 固定线程池，工具超时经 Future.get 取消，
      * 不占用/阻塞 Web 容器与 Reactor 线程；容器关闭时随 JVM 退出。
+     * 迭代9：可观测性总开关开启时包裹 ContextExecutorService（MDC 跨池传递）；
+     * 关闭态返回原始池，行为与迭代8 逐字节一致。
      */
     @Bean(destroyMethod = "shutdown")
-    public ExecutorService toolExecutor(ToolProperties properties) {
+    public ExecutorService toolExecutor(ToolProperties properties,
+                                        @org.springframework.beans.factory.annotation.Value(
+                                                "${app.observability.enabled:false}")
+                                        boolean observabilityEnabled) {
         int poolSize = Math.max(1, properties.getExecutorPoolSize());
-        return Executors.newFixedThreadPool(poolSize, r -> {
+        ExecutorService pool = Executors.newFixedThreadPool(poolSize, r -> {
             Thread t = new Thread(r, "tool-executor");
             t.setDaemon(true);
             return t;
         });
+        return observabilityEnabled
+                ? io.micrometer.context.ContextExecutorService.wrap(pool) : pool;
     }
 
     /**

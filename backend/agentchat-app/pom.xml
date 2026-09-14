@@ -128,6 +128,23 @@
             </exclusions>
         </dependency>
 
+        <!-- 迭代9：可观测性——actuator + 内存 MeterRegistry（本地 /actuator/metrics 查看，不引 Prometheus registry）。
+             版本由 Boot 3.4.0 BOM 管理（spring-boot-actuator* 3.4.0、micrometer-* 1.14.1）。
+             离线核验：tc_resp 无 3.4.0 actuator jar（仅 2.2.x/2.5.0），首次构建需在线拉取并回填 tc_resp；
+             传递 micrometer-core/observation/commons 1.14.1 已在 tc_resp 可离线解析。
+             端点暴露面由 management.endpoints.(web|jmx).exposure.include 默认空收口（R-2）。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- 迭代9：MDC 跨 Reactor/线程池传递（Hooks.enableAutomaticContextPropagation 的前置）。
+             版本经 Boot BOM → micrometer-bom 1.14.1 管理为 1.1.2；tc_resp 1.1.2 jar 已离线可解析。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>context-propagation</artifactId>
+        </dependency>
+
         <!-- 工具 -->
         <dependency>
             <groupId>org.projectlombok</groupId>

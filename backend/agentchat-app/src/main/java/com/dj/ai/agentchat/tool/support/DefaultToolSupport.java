@@ -2,6 +2,7 @@ package com.dj.ai.agentchat.tool.support;
 
 import com.dj.ai.agentchat.tool.mcp.callback.McpToolProvider;
 import com.dj.ai.agentchat.tool.registry.ToolRegistry;
+import com.dj.ai.agentchat.util.TraceIds;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -10,7 +11,6 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * 默认工具挂载实现（插入迭代 G；迭代4 T4 扩展 MCP 合并）：
@@ -62,7 +62,10 @@ public class DefaultToolSupport implements ToolSupport {
         if (sessionId != null && !sessionId.isBlank()) {
             context.put(CTX_SESSION_ID, sessionId);
         }
-        context.put(CTX_REQUEST_ID, UUID.randomUUID().toString());
+        // 迭代9（决策 b）：requestId 复用当前请求 traceId（MDC 有值时）——
+        // agent_tool_call_log.call_id 前缀、编排 run_id 天然同源，一个 ID grep 全链；
+        // 关闭态 MDC 恒空 → 走新 traceId 分支，与迭代8 的 UUID 同为无格式假设唯一串（R-4 已清）
+        context.put(CTX_REQUEST_ID, TraceIds.currentOrNew());
         context.put(CTX_TOOL_BRIDGE, bridge);
         log.debug("对话工具挂载: sessionId={}, 工具数={}", sessionId, merged.size());
         return new ToolMount(List.copyOf(merged), context, bridge);
