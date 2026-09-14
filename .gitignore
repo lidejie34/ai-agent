@@ -70,3 +70,5 @@ backend/agentchat-app/dev-local/
 
 # ========== Git 自身 ==========
 .git/
+
+.codegraph
