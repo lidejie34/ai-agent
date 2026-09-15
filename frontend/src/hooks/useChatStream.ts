@@ -134,20 +134,28 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
   }, [])
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, kbFilter?: { project?: string; tags?: string[] }) => {
       const trimmed = text.trim()
       if (!trimmed) return // 空白拦截
       if (controllerRef.current) return // 流式中双保险拦截
 
       setLastError(null)
       const sid = sessionRef.current
-      const body: { message: string; sessionId?: string } = { message: trimmed }
+      const body: { message: string; sessionId?: string; kbProject?: string; kbTags?: string[] } =
+        { message: trimmed }
       if (sid) {
         body.sessionId = sid // 续接
       } else if (rememberRef.current) {
         body.sessionId = '' // 新建
       }
       // 无状态：省略 sessionId 键
+      // 知识库维度过滤（迭代10）：全空省略两键，请求形态与未打标一致
+      if (kbFilter?.project) {
+        body.kbProject = kbFilter.project
+      }
+      if (kbFilter?.tags && kbFilter.tags.length > 0) {
+        body.kbTags = kbFilter.tags
+      }
 
       const userMsg: ChatMessage = { id: uid('u'), role: 'user', content: trimmed, status: 'done' }
       const assistantId = uid('a')

@@ -3,6 +3,7 @@ package com.dj.ai.agentchat.rag.admin.service;
 import com.dj.ai.agentchat.rag.RagProperties;
 import com.dj.ai.agentchat.rag.admin.KbAdminException;
 import com.dj.ai.agentchat.rag.chunk.TextChunker;
+import com.dj.ai.agentchat.rag.dim.DimRepository;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingService;
 import com.dj.ai.agentchat.rag.schema.RagSchemaInitializer;
 import com.dj.ai.agentchat.rag.store.KbRepository;
@@ -38,6 +39,7 @@ class KbDocumentServiceMetaTest {
     private KbRepository repository;
     private RagEmbeddingService embeddingService;
     private RagProperties properties;
+    private DimRepository dimRepository;
     private KbDocumentService service;
 
     @BeforeEach
@@ -45,9 +47,13 @@ class KbDocumentServiceMetaTest {
         repository = mock(KbRepository.class);
         embeddingService = mock(RagEmbeddingService.class);
         RagSchemaInitializer schemaInitializer = mock(RagSchemaInitializer.class);
+        dimRepository = mock(DimRepository.class);
+        // 默认项目已受管存在（迭代10 追加：写侧项目须先维护）；不存在场景由用例显式 stub false
+        when(dimRepository.projectExists(anyString())).thenReturn(true);
         properties = new RagProperties();
         service = new KbDocumentService(repository, embeddingService,
-                new TextChunker(properties.getChunk()), properties, schemaInitializer);
+                new TextChunker(properties.getChunk()), properties, schemaInitializer,
+                dimRepository);
     }
 
     private byte[] utf8(String s) {
@@ -121,6 +127,42 @@ class KbDocumentServiceMetaTest {
         assertThat(view.project()).isEqualTo("物流域");
         assertThat(view.tags()).containsExactly("承运");
         assertThat(view.content()).isNull();
+    }
+
+    @Test
+    void upload_unknownProject_rejected400BeforeEmbedding() {
+        when(dimRepository.projectExists("幽灵域")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.upload("a.md", utf8("正文内容"), "幽灵域", List.of()))
+                .isInstanceOf(KbAdminException.class)
+                .extracting(e -> ((KbAdminException) e).getCode())
+                .isEqualTo(KbAdminException.KB_INVALID_PROJECT);
+        // fail-fast：未受管项目不浪费 embedding、不落库
+        verify(embeddingService, never()).embedBatch(anyList());
+        verify(repository, never()).saveReady(anyString(), anyInt(), anyString(),
+                anyString(), anyList(), anyList(), any(), anyList());
+    }
+
+    @Test
+    void upload_nullProject_skipsManagedCheck() {
+        stubReady(8L);
+
+        service.upload("无归属.md", utf8("正文内容"), null, List.of());
+
+        verify(dimRepository, never()).projectExists(anyString());
+        verify(repository).saveReady(eq("无归属.md"), anyInt(), anyString(), anyString(),
+                anyList(), anyList(), isNull(), eq(List.of()));
+    }
+
+    @Test
+    void updateMeta_unknownProject_rejectedBeforeStore() {
+        when(dimRepository.projectExists("幽灵域")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.updateMeta(7L, "幽灵域", List.of()))
+                .isInstanceOf(KbAdminException.class)
+                .extracting(e -> ((KbAdminException) e).getCode())
+                .isEqualTo(KbAdminException.KB_INVALID_PROJECT);
+        verify(repository, never()).updateMeta(anyLong(), any(), anyList());
     }
 
     @Test

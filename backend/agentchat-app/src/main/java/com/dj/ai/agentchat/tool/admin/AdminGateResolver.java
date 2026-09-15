@@ -8,6 +8,7 @@ package com.dj.ai.agentchat.tool.admin;
  *   <li>{@code /api/admin/tools[/**]}、{@code /api/admin/mcp[/**]}、
  *       {@code /api/admin/tool-call-logs} → {@link Gate#TOOLS}（app.tools.enabled）；</li>
  *   <li>{@code /api/admin/kb[/**]} → {@link Gate#RAG}（app.rag.enabled）；</li>
+ *   <li>{@code /api/admin/dim[/**]} → {@link Gate#RAG}（维度表存于 rag PG 库，迭代10 追加）；</li>
  *   <li>其他管理端路径 → {@link Gate#TOKEN_ONLY}（只校验 X-Admin-Token）。</li>
  * </ul>
  * 段边界严格匹配（{@code /api/admin/kb2} 不会被当成知识库路径）。
@@ -19,6 +20,8 @@ public final class AdminGateResolver {
     private static final String MCP_SEGMENT = "mcp";
     private static final String TOOL_LOGS_SEGMENT = "tool-call-logs";
     private static final String KB_SEGMENT = "kb";
+    /** 迭代10 追加：维度维护（dim_project 存于 rag PG 库，随 RAG 开关闸门）。 */
+    private static final String DIM_SEGMENT = "dim";
 
     public enum Gate {
         TOOLS,
@@ -35,7 +38,7 @@ public final class AdminGateResolver {
                 ? remainder.substring(0, remainder.indexOf('/')) : remainder;
         return switch (firstSegment) {
             case TOOLS_SEGMENT, MCP_SEGMENT, TOOL_LOGS_SEGMENT -> Gate.TOOLS;
-            case KB_SEGMENT -> Gate.RAG;
+            case KB_SEGMENT, DIM_SEGMENT -> Gate.RAG;
             default -> Gate.TOKEN_ONLY;
         };
     }

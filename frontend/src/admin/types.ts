@@ -142,3 +142,32 @@ export interface KbHealth {
   chunkCount: number
   dimensions: number
 }
+
+// ---- 维度维护（迭代10 追加，/api/admin/dim）----
+
+/** 受管项目：dim_project 行 + 引用文档数。 */
+export interface DimProject {
+  id: number
+  name: string
+  remark?: string | null
+  docCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 项目新建/更新 body：name 必填（白名单校验在服务端），remark 可空。 */
+export interface DimProjectUpsert {
+  name: string
+  remark?: string | null
+}
+
+/** 标签派生视图：distinct 展开 + 引用文档数（无独立表）。 */
+export interface DimTagView {
+  name: string
+  docCount: number
+}
+
+/** 标签改名/删除响应：受影响文档数。 */
+export interface DimTagOpResult {
+  affectedDocs: number
+}

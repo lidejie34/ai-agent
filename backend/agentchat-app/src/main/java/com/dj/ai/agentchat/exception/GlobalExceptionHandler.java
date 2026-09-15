@@ -97,7 +97,10 @@ public class GlobalExceptionHandler {
             case KbAdminException.KB_INVALID_FILE, KbAdminException.KB_FILE_TOO_LARGE,
                  KbAdminException.KB_INVALID_PROJECT, KbAdminException.KB_INVALID_TAGS ->
                     HttpStatus.BAD_REQUEST;
-            case KbAdminException.KB_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case KbAdminException.KB_NOT_FOUND, KbAdminException.KB_PROJECT_NOT_FOUND ->
+                    HttpStatus.NOT_FOUND;
+            case KbAdminException.KB_PROJECT_EXISTS, KbAdminException.KB_PROJECT_IN_USE ->
+                    HttpStatus.CONFLICT;
             case KbAdminException.KB_EMBEDDING_FAILED, KbAdminException.KB_STORE_FAILED ->
                     HttpStatus.BAD_GATEWAY;
             case KbAdminException.KB_DISABLED -> HttpStatus.SERVICE_UNAVAILABLE;

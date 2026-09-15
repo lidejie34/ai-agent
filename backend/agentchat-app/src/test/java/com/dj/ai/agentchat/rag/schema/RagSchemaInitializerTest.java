@@ -58,15 +58,16 @@ class RagSchemaInitializerTest {
     }
 
     @Test
-    void ensureSchema_executesExactlyNineStatements() throws Exception {
+    void ensureSchema_executesExactlyTenStatements() throws Exception {
         initializer.ensureSchema();
 
         // 扩展 1 + 两表 2 + 两索引 2 = 5
-        // 迭代6 五条 + 迭代10 四条（ALTER×2 + project 索引 + tags GIN）
-        verify(statement, times(9)).execute(org.mockito.ArgumentMatchers.anyString());
+        // 迭代6 五条 + 迭代10 五条（ALTER×2 + project 索引 + tags GIN + dim_project 受管项目表）
+        verify(statement, times(10)).execute(org.mockito.ArgumentMatchers.anyString());
         verify(statement).execute(contains("ADD COLUMN IF NOT EXISTS project"));
         verify(statement).execute(contains("ADD COLUMN IF NOT EXISTS tags"));
         verify(statement).execute(contains("USING gin (tags)"));
+        verify(statement).execute(contains("CREATE TABLE IF NOT EXISTS dim_project"));
     }
 
     @Test

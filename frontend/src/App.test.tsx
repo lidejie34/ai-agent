@@ -176,4 +176,62 @@ describe('App 集成（AC-17~29）', () => {
     const sw = screen.getByTestId('remember-switch')
     expect(sw).toBeChecked()
   })
+
+  it('知识库维度可用：选择器渲染；选项目/标签后发送，请求体带 kbProject/kbTags', async () => {
+    const { fetchFn } = setupApp()
+    // 在默认路由上叠加 dimensions 路由（setupApp 默认 404 → 选择器隐藏）
+    const original = fetchFn.getMockImplementation()!
+    fetchFn.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/kb/dimensions')) {
+        return json({ projects: ['订单域'], tags: ['售后', '退货'] })
+      }
+      return original(url, init)
+    })
+    render(<App />)
+
+    const bar = await screen.findByTestId('kb-filter-bar')
+    // 项目单选：打开下拉选「订单域」
+    const projectSel = screen.getByTestId('chat-kb-project')
+    fireEvent.mouseDown(projectSel.querySelector('.ant-select-selector') as HTMLElement)
+    await userEvent.click(
+      await screen.findByText('订单域', { selector: '.ant-select-item-option-content' }),
+    )
+    // 标签多选：选「售后」
+    const tagsSel = screen.getByTestId('chat-kb-tags')
+    fireEvent.mouseDown(tagsSel.querySelector('.ant-select-selector') as HTMLElement)
+    await userEvent.click(
+      await screen.findByText('售后', { selector: '.ant-select-item-option-content' }),
+    )
+    expect(bar).toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '查退货规则' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.kbProject).toBe('订单域')
+      expect(body.kbTags).toEqual(['售后'])
+    })
+  })
+
+  it('知识库维度不可用（404/空）：选择器隐藏，发送不带维度键', async () => {
+    const { fetchFn } = setupApp()
+    render(<App />)
+    await waitFor(() => expect(screen.queryByTestId('sidebar-skeleton')).toBeNull())
+
+    expect(screen.queryByTestId('kb-filter-bar')).toBeNull()
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '你好' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body).not.toHaveProperty('kbProject')
+      expect(body).not.toHaveProperty('kbTags')
+    })
+  })
 })

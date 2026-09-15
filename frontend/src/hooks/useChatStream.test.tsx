@@ -56,6 +56,37 @@ describe('useChatStream 新建会话（AC-17）', () => {
   })
 })
 
+describe('useChatStream 知识库维度过滤（迭代10）', () => {
+  it('带过滤：请求体附 kbProject/kbTags', async () => {
+    const fetchFn = mockFetchOnce(sseResponse([encodeSse.session(SID), encodeSse.done()]))
+    const { result } = renderHook(() => useChatStream({}))
+
+    await act(async () => {
+      await result.current.send('查售后政策', { project: '订单域', tags: ['售后', '退货'] })
+    })
+
+    expect(lastFetchBody(fetchFn)).toMatchObject({
+      message: '查售后政策',
+      sessionId: '',
+      kbProject: '订单域',
+      kbTags: ['售后', '退货'],
+    })
+  })
+
+  it('空过滤：请求体省略 kbProject/kbTags 键（形态与未打标一致）', async () => {
+    const fetchFn = mockFetchOnce(sseResponse([encodeSse.session(SID), encodeSse.done()]))
+    const { result } = renderHook(() => useChatStream({}))
+
+    await act(async () => {
+      await result.current.send('你好', { project: undefined, tags: [] })
+    })
+
+    const body = lastFetchBody(fetchFn) as Record<string, unknown>
+    expect(body).not.toHaveProperty('kbProject')
+    expect(body).not.toHaveProperty('kbTags')
+  })
+})
+
 describe('useChatStream 无状态（AC-18）', () => {
   it('remember=false：请求体省略 sessionId 键；无 session 帧；不确立会话 ID', async () => {
     const fetchFn = mockFetchOnce(sseResponse([encodeSse.chunk('无状态回复'), encodeSse.done()]))

@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Alert, Button, Empty, Input, Modal, Popconfirm, Skeleton, Space, Table, Tag, Tooltip, Upload, message } from 'antd'
+import { Alert, Button, Empty, Input, Modal, Popconfirm, Select, Skeleton, Space, Table, Tag, Tooltip, Upload, message } from 'antd'
 import { ReloadOutlined, UploadOutlined, WarningOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import {
   deleteKbDocument,
   getKbHealth,
+  listDimProjects,
   listKbDocuments,
   patchKbDocumentMeta,
   reindexKbDocument,
@@ -14,7 +15,7 @@ import { useAdminAsync } from '../hooks/useAdminAsync'
 import { adminErrorText } from '../../utils/errors'
 import { fmtBytes, fmtTime, hasErrorCode } from '../utils'
 import { KbStatusTag } from '../components/tags'
-import type { KbDocFilter, KbDocument, KbHealth } from '../types'
+import type { DimProject, KbDocFilter, KbDocument, KbHealth } from '../types'
 
 // 知识库管理页（迭代6，#88；迭代10 维度元数据）：
 // - 顶部健康 Alert：Ollama bge-m3 / PG(pgvector) 分项状态 + 文档/切片计数；仅进页与手动刷新时探测，无轮询；
@@ -43,6 +44,9 @@ export function validateMetaInput(project: string, tags: string[]): string | nul
 
 export default function KbPage() {
   const healthReq = useAdminAsync<KbHealth>(() => getKbHealth(), [])
+  // 受管项目（迭代10 追加）：项目一律下拉选择，选项来自维度维护页；自由输入已下线
+  const projectsReq = useAdminAsync<DimProject[]>(() => listDimProjects(), [])
+  const projectOptions = (projectsReq.data ?? []).map((p) => ({ value: p.name, label: p.name }))
   // 过滤：草稿（输入框）与生效值（点击查询后）分离，避免每击键一次请求
   const [filterDraft, setFilterDraft] = useState({ project: '', tag: '' })
   const [filter, setFilter] = useState<KbDocFilter>({})
@@ -294,13 +298,14 @@ export default function KbPage() {
           >
             刷新
           </Button>
-          <Input
+          <Select
             allowClear
+            showSearch
             placeholder="按项目过滤"
             style={{ width: 150 }}
-            value={filterDraft.project}
-            onChange={(e) => setFilterDraft((d) => ({ ...d, project: e.target.value }))}
-            onPressEnter={applyFilter}
+            options={projectOptions}
+            value={filterDraft.project || undefined}
+            onChange={(v) => setFilterDraft((d) => ({ ...d, project: v ?? '' }))}
             data-testid="kb-filter-project"
           />
           <Input
@@ -379,11 +384,13 @@ export default function KbPage() {
           <span className="kb-upload-hint" data-testid="kb-upload-filename">
             {pendingFile ? `已选择：${pendingFile.name}` : '仅支持 .md/.markdown/.txt（UTF-8），≤ 10MB'}
           </span>
-          <Input
-            placeholder="归属项目（可选），如：订单域"
-            maxLength={64}
-            value={upProject}
-            onChange={(e) => setUpProject(e.target.value)}
+          <Select
+            allowClear
+            showSearch
+            placeholder="归属项目（可选，仅可选已维护项目）"
+            options={projectOptions}
+            value={upProject || undefined}
+            onChange={(v) => setUpProject(v ?? '')}
             data-testid="kb-upload-project"
           />
           <Input
@@ -392,6 +399,7 @@ export default function KbPage() {
             onChange={(e) => setUpTags(e.target.value)}
             data-testid="kb-upload-tags"
           />
+          <span className="kb-upload-hint">项目需先在「维度维护」页创建；标签可自由输入</span>
         </Space>
       </Modal>
 
@@ -407,11 +415,13 @@ export default function KbPage() {
         data-testid="kb-meta-modal"
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Input
+          <Select
+            allowClear
+            showSearch
             placeholder="归属项目（留空 = 清除归属）"
-            maxLength={64}
-            value={editProject}
-            onChange={(e) => setEditProject(e.target.value)}
+            options={projectOptions}
+            value={editProject || undefined}
+            onChange={(v) => setEditProject(v ?? '')}
             data-testid="kb-meta-project"
           />
           <Input
@@ -421,7 +431,7 @@ export default function KbPage() {
             data-testid="kb-meta-tags"
           />
           <span className="kb-upload-hint">
-            保存为全量替换：项目/标签仅支持中文、字母、数字、中划线、下划线；标签最多 8 个、单个 ≤ 32 字符
+            保存为全量替换：项目仅可选已维护项（维度维护页管理）；标签自由输入，仅支持中文、字母、数字、中划线、下划线，最多 8 个、单个 ≤ 32 字符
           </span>
         </Space>
       </Modal>

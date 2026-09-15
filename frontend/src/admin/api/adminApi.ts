@@ -1,5 +1,9 @@
 import { adminFetch, adminUpload } from './adminClient'
 import type {
+  DimProject,
+  DimProjectUpsert,
+  DimTagOpResult,
+  DimTagView,
   KbDocFilter,
   KbDocument,
   KbDocumentMetaPatch,
@@ -87,3 +91,32 @@ export const deleteKbDocument = (id: number) =>
 
 export const reindexKbDocument = (id: number) =>
   adminFetch<KbDocument>(`/api/admin/kb/documents/${id}/reindex`, { method: 'POST' })
+
+// ---- 维度维护（迭代10 追加，/api/admin/dim）----
+
+export const listDimProjects = () => adminFetch<DimProject[]>('/api/admin/dim/projects')
+
+export const createDimProject = (body: DimProjectUpsert) =>
+  adminFetch<DimProject>('/api/admin/dim/projects', { method: 'POST', body: JSON.stringify(body) })
+
+export const updateDimProject = (id: number, body: DimProjectUpsert) =>
+  adminFetch<DimProject>(`/api/admin/dim/projects/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+
+export const deleteDimProject = (id: number) =>
+  adminFetch<void>(`/api/admin/dim/projects/${id}`, { method: 'DELETE' })
+
+export const listDimTags = () => adminFetch<DimTagView[]>('/api/admin/dim/tags')
+
+export const renameDimTag = (from: string, to: string) =>
+  adminFetch<DimTagOpResult>('/api/admin/dim/tags', {
+    method: 'PATCH',
+    body: JSON.stringify({ from, to }),
+  })
+
+export const deleteDimTag = (name: string) =>
+  adminFetch<DimTagOpResult>(`/api/admin/dim/tags/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })

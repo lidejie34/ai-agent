@@ -27,7 +27,7 @@ export interface StreamHandlers {
  * 看门狗超时调用 {@code controller.abort(reason)}，用户停止由调用方 abort（无 reason）。
  */
 export async function streamChat(
-  body: { message: string; sessionId?: string },
+  body: { message: string; sessionId?: string; kbProject?: string; kbTags?: string[] },
   controller: AbortController,
   handlers: StreamHandlers,
 ): Promise<void> {

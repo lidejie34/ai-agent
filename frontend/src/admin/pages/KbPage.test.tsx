@@ -5,7 +5,7 @@ import { message } from 'antd'
 import KbPage from './KbPage'
 import { clearAdminToken, persistAdminToken } from '../auth'
 import { apiErrorResponse, jsonResponse } from '../testHelpers'
-import type { KbDocument, KbHealth } from '../types'
+import type { DimProject, KbDocument, KbHealth } from '../types'
 
 // T11（迭代6）：知识库管理页——健康 Alert（手动刷新/无轮询）、multipart 上传、
 // 列表字段/FAILED 行、重建索引、删除（Popconfirm 二次确认）、KB_* 错误文案。
@@ -61,18 +61,54 @@ function stubFetch(handler: (url: string, init?: RequestInit) => Response | Prom
   return fn
 }
 
-/** 默认路由：health → 给定健康视图；documents → 给定列表；其余 404。 */
-function stubDefault(health: KbHealth, documents: KbDocument[], extra?: Record<string, Response>) {
+/** 维度项目视图（迭代10 追加：项目受管，页面挂载拉 /api/admin/dim/projects）。 */
+const dimProject = (id: number, name: string): DimProject => ({
+  id,
+  name,
+  remark: null,
+  docCount: 0,
+  createdAt: '2026-09-15 10:00:00',
+  updatedAt: '2026-09-15 10:00:00',
+})
+
+/** 默认路由：health → 给定健康视图；documents → 给定列表；dim/projects → 受管项目；其余 404。 */
+function stubDefault(
+  health: KbHealth,
+  documents: KbDocument[],
+  extra?: Record<string, Response>,
+  projects: string[] = [],
+) {
   return stubFetch((url, init) => {
     const method = init?.method ?? 'GET'
     if (url.includes('/api/admin/kb/health') && method === 'GET') return jsonResponse(health)
     if (url.endsWith('/api/admin/kb/documents') && method === 'GET') return jsonResponse(documents)
+    if (url.includes('/api/admin/dim/projects') && method === 'GET')
+      return jsonResponse(projects.map((p, i) => dimProject(i + 1, p)))
     if (extra) {
       const hit = Object.keys(extra).find((k) => url.includes(k))
       if (hit) return extra[hit]
     }
     return new Response('not found', { status: 404 })
   })
+}
+
+/** antd Select 选择：打开下拉并点击选项文本（选项渲染在 body 弹层）。 */
+async function selectOption(testId: string, optionText: string) {
+  const root = screen.getByTestId(testId)
+  fireEvent.mouseDown(root.querySelector('.ant-select-selector') as HTMLElement)
+  const option = await screen.findByText(optionText, { selector: '.ant-select-item-option-content' })
+  await userEvent.click(option)
+}
+
+/** 单选 Select 当前选中项文本；未选中返回 null。 */
+function selectValue(testId: string): string | null {
+  return screen.getByTestId(testId).querySelector('.ant-select-selection-item')?.textContent ?? null
+}
+
+/** 清除单选 Select（allowClear 图标常驻 DOM，jsdom 可直接点击）。 */
+async function clearSelect(testId: string) {
+  const root = screen.getByTestId(testId)
+  await userEvent.click(root.querySelector('.ant-select-clear') as HTMLElement)
 }
 
 function fileInput(): HTMLInputElement {
@@ -205,7 +241,8 @@ describe('知识库页：上传', () => {
 
     render(<KbPage />)
     await screen.findByText('知识库服务正常')
-    expect(fn).toHaveBeenCalledTimes(2)
+    // mount：health + documents + dim/projects
+    expect(fn).toHaveBeenCalledTimes(3)
 
     await openUploadAndPick(new File(['# 差旅制度\n正文'], '差旅制度.md', { type: 'text/markdown' }))
     await userEvent.click(modalOk())
@@ -226,8 +263,8 @@ describe('知识库页：上传', () => {
     expect(appendSpy.mock.calls.map((c) => c[0])).not.toContain('tags')
     expect(await screen.findByText(/上传并向量化完成/)).toBeInTheDocument()
 
-    // 上传成功后文档列表 + 健康计数都重拉：mount 2 + POST 1 + 刷新 2
-    await waitFor(() => expect(fn).toHaveBeenCalledTimes(5))
+    // 上传成功后文档列表 + 健康计数都重拉：mount 3 + POST 1 + 刷新 2
+    await waitFor(() => expect(fn).toHaveBeenCalledTimes(6))
     expect(
       fn.mock.calls.filter((c) => c[0].includes('/health') && (c[1] as RequestInit).method === undefined),
     ).toHaveLength(2)
@@ -239,16 +276,21 @@ describe('知识库页：上传', () => {
     appendSpy.mockRestore()
   })
 
-  it('上传带项目/标签：form 附 project 与逗号拼接 tags（trim/去空白）', async () => {
-    stubDefault(healthy(), [], {
-      '/api/admin/kb/documents': jsonResponse(doc({ id: 8, fileName: '售后.md' }), 201),
-    })
+  it('上传带项目/标签：项目下拉选择受管项目，form 附 project 与逗号拼接 tags', async () => {
+    stubDefault(
+      healthy(),
+      [],
+      {
+        '/api/admin/kb/documents': jsonResponse(doc({ id: 8, fileName: '售后.md' }), 201),
+      },
+      ['订单域'],
+    )
     const appendSpy = vi.spyOn(FormData.prototype, 'append')
 
     render(<KbPage />)
     await screen.findByText('知识库服务正常')
     await openUploadAndPick(new File(['内容'], '售后.md', { type: 'text/markdown' }))
-    fireEvent.change(screen.getByTestId('kb-upload-project'), { target: { value: ' 订单域 ' } })
+    await selectOption('kb-upload-project', '订单域')
     fireEvent.change(screen.getByTestId('kb-upload-tags'), { target: { value: '售后, 退货，,售后' } })
     await userEvent.click(modalOk())
 
@@ -259,21 +301,29 @@ describe('知识库页：上传', () => {
     appendSpy.mockRestore()
   })
 
-  it('上传 meta 非法（项目含逗号）：前端预检拦截，不发 POST', async () => {
-    const fn = stubDefault(healthy(), [], {
-      '/api/admin/kb/documents': jsonResponse(doc(), 201),
-    })
+  it('上传 400 KB_INVALID_PROJECT（项目未受管）：透传后端 message', async () => {
+    stubDefault(
+      healthy(),
+      [],
+      {
+        '/api/admin/kb/documents': apiErrorResponse(
+          'KB_INVALID_PROJECT',
+          '项目不存在，请先在「维度维护」页创建项目：订单域',
+          400,
+        ),
+      },
+      ['订单域'],
+    )
     render(<KbPage />)
     await screen.findByText('知识库服务正常')
-    const before = fn.mock.calls.length
 
     await openUploadAndPick(new File(['x'], 'a.md', { type: 'text/markdown' }))
-    fireEvent.change(screen.getByTestId('kb-upload-project'), { target: { value: '含,逗号' } })
+    await selectOption('kb-upload-project', '订单域')
     await userEvent.click(modalOk())
 
-    expect(await screen.findByText(/项目名仅支持中文\/字母\/数字\/中划线\/下划线/)).toBeInTheDocument()
-    expect(fn.mock.calls.filter((c) => (c[1] as RequestInit)?.method === 'POST')).toHaveLength(0)
-    expect(fn.mock.calls.length).toBe(before)
+    expect(
+      await screen.findByText(/项目不存在，请先在「维度维护」页创建项目/),
+    ).toBeInTheDocument()
   })
 
   it('上传 502 KB_EMBEDDING_FAILED：错误 message 走中文映射，列表不被清空', async () => {
@@ -322,12 +372,12 @@ describe('知识库页：项目/标签列与过滤（迭代10）', () => {
     expect(plainRow?.querySelectorAll('td')[3]).toHaveTextContent('-')
   })
 
-  it('过滤查询：GET documents 带 project/tag 查询参数', async () => {
-    const fn = stubDefault(healthy(), [doc({ project: '订单域', tags: ['售后'] })])
+  it('过滤查询：项目下拉选择 + 标签输入 → GET documents 带 project/tag 查询参数', async () => {
+    const fn = stubDefault(healthy(), [doc({ project: '订单域', tags: ['售后'] })], undefined, ['订单域'])
     render(<KbPage />)
     await screen.findByText('差旅制度.md')
 
-    fireEvent.change(screen.getByTestId('kb-filter-project'), { target: { value: '订单域' } })
+    await selectOption('kb-filter-project', '订单域')
     fireEvent.change(screen.getByTestId('kb-filter-tag'), { target: { value: '售后' } })
     await userEvent.click(screen.getByTestId('kb-filter-apply'))
 
@@ -356,7 +406,7 @@ describe('知识库页：项目/标签列与过滤（迭代10）', () => {
       const last = fn.mock.calls[fn.mock.calls.length - 1]
       expect((last[0] as string).endsWith('/documents')).toBe(true)
     })
-    expect(screen.getByTestId('kb-filter-project')).toHaveValue('')
+    expect(selectValue('kb-filter-project')).toBeNull()
     expect(screen.getByTestId('kb-filter-tag')).toHaveValue('')
   })
 
@@ -378,12 +428,13 @@ describe('知识库页：项目/标签列与过滤（迭代10）', () => {
       const method = init?.method ?? 'GET'
       if (url.includes('/health')) return jsonResponse(healthy())
       if (url.includes('/documents') && method === 'GET') return jsonResponse([])
+      if (url.includes('/api/admin/dim/projects')) return jsonResponse([dimProject(1, '订单域')])
       return new Response('nf', { status: 404 })
     })
     render(<KbPage />)
     await screen.findByText('知识库暂无文档，请上传 Markdown / TXT 文件')
 
-    fireEvent.change(screen.getByTestId('kb-filter-project'), { target: { value: '订单域' } })
+    await selectOption('kb-filter-project', '订单域')
     await userEvent.click(screen.getByTestId('kb-filter-apply'))
 
     expect(await screen.findByText('没有匹配过滤条件的文档，可调整项目/标签后重新查询')).toBeInTheDocument()
@@ -419,17 +470,20 @@ describe('知识库页：编辑标签弹窗（迭代10 PATCH 全量替换）', (
         return jsonResponse(doc({ id: 1, project: '物流域', tags: ['承运'] }))
       if (url.endsWith('/documents') && method === 'GET')
         return jsonResponse([doc({ id: 1, project: '订单域', tags: ['售后', '退货'] })])
+      if (url.includes('/api/admin/dim/projects'))
+        return jsonResponse([dimProject(1, '订单域'), dimProject(2, '物流域')])
       return new Response('nf', { status: 404 })
     })
     render(<KbPage />)
     await screen.findByText('订单域')
 
     await userEvent.click(screen.getByRole('button', { name: '编辑标签' }))
-    // 预填
-    expect(await screen.findByTestId('kb-meta-project')).toHaveValue('订单域')
+    // 预填（Select 选中项 + 标签文本框）
+    expect(await screen.findByTestId('kb-meta-project')).toBeInTheDocument()
+    expect(selectValue('kb-meta-project')).toBe('订单域')
     expect(screen.getByTestId('kb-meta-tags')).toHaveValue('售后,退货')
 
-    fireEvent.change(screen.getByTestId('kb-meta-project'), { target: { value: '物流域' } })
+    await selectOption('kb-meta-project', '物流域')
     fireEvent.change(screen.getByTestId('kb-meta-tags'), { target: { value: '承运' } })
     await userEvent.click(modalOk())
 
@@ -457,14 +511,15 @@ describe('知识库页：编辑标签弹窗（迭代10 PATCH 全量替换）', (
       if (url.endsWith('/documents/1') && method === 'PATCH') return jsonResponse(doc({ id: 1 }))
       if (url.endsWith('/documents') && method === 'GET')
         return jsonResponse([doc({ id: 1, project: '订单域', tags: ['售后'] })])
+      if (url.includes('/api/admin/dim/projects')) return jsonResponse([dimProject(1, '订单域')])
       return new Response('nf', { status: 404 })
     })
     render(<KbPage />)
     await screen.findByText('订单域')
 
     await userEvent.click(screen.getByRole('button', { name: '编辑标签' }))
-    await screen.findByTestId('kb-meta-project')
-    fireEvent.change(screen.getByTestId('kb-meta-project'), { target: { value: '' } })
+    expect(selectValue('kb-meta-project')).toBe('订单域')
+    await clearSelect('kb-meta-project')
     fireEvent.change(screen.getByTestId('kb-meta-tags'), { target: { value: '' } })
     await userEvent.click(modalOk())
 
@@ -482,6 +537,8 @@ describe('知识库页：编辑标签弹窗（迭代10 PATCH 全量替换）', (
       if (method === 'PATCH')
         return apiErrorResponse('KB_INVALID_PROJECT', '项目名仅支持中文/字母/数字/中划线/下划线：「xx」', 400)
       if (url.endsWith('/documents')) return jsonResponse([doc({ id: 1, project: '订单域' })])
+      if (url.includes('/api/admin/dim/projects'))
+        return jsonResponse([dimProject(1, '订单域'), dimProject(2, '新域')])
       return new Response('nf', { status: 404 })
     })
     render(<KbPage />)
@@ -489,7 +546,7 @@ describe('知识库页：编辑标签弹窗（迭代10 PATCH 全量替换）', (
 
     await userEvent.click(screen.getByRole('button', { name: '编辑标签' }))
     await screen.findByTestId('kb-meta-project')
-    fireEvent.change(screen.getByTestId('kb-meta-project'), { target: { value: '新域' } })
+    await selectOption('kb-meta-project', '新域')
     await userEvent.click(modalOk())
 
     expect(await screen.findByText(/项目名仅支持中文\/字母\/数字\/中划线\/下划线：「xx」/)).toBeInTheDocument()
@@ -583,31 +640,34 @@ describe('知识库页：重建 / 删除 / 刷新 / 轮询', () => {
   it('手动刷新：按钮重新请求 health + documents', async () => {
     const fn = vi
       .fn()
+      // mount 顺序：health → dim/projects → documents；刷新只重拉 health + documents
       .mockResolvedValueOnce(jsonResponse(healthy()))
+      .mockResolvedValueOnce(jsonResponse([])) // dim/projects
       .mockResolvedValueOnce(jsonResponse([doc()]))
       .mockResolvedValueOnce(jsonResponse(healthy({ chunkCount: 99 })))
       .mockResolvedValueOnce(jsonResponse([doc(), doc({ id: 2, fileName: 'second.md' })]))
     vi.stubGlobal('fetch', fn)
     render(<KbPage />)
     await screen.findByText('差旅制度.md')
-    expect(fn).toHaveBeenCalledTimes(2)
+    expect(fn).toHaveBeenCalledTimes(3)
 
     await userEvent.click(screen.getByTestId('kb-refresh'))
     expect(await screen.findByText('second.md')).toBeInTheDocument()
     expect(screen.getByText('切片 99 条')).toBeInTheDocument()
-    expect(fn).toHaveBeenCalledTimes(4)
+    expect(fn).toHaveBeenCalledTimes(5)
   })
 
   it('不轮询：推进 10s 定时器，fetch 次数不增长', async () => {
     const fn = stubDefault(healthy(), [doc()])
     render(<KbPage />)
     await screen.findByText('差旅制度.md')
-    expect(fn).toHaveBeenCalledTimes(2)
+    // mount：health + documents + dim/projects，此后无轮询
+    expect(fn).toHaveBeenCalledTimes(3)
 
     vi.useFakeTimers()
     act(() => {
       vi.advanceTimersByTime(10_000)
     })
-    expect(fn).toHaveBeenCalledTimes(2)
+    expect(fn).toHaveBeenCalledTimes(3)
   })
 })

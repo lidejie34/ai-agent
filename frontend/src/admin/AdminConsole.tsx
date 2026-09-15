@@ -6,6 +6,7 @@ import ToolsPage from './pages/ToolsPage'
 import McpServersPage from './pages/McpServersPage'
 import ToolLogsPage from './pages/ToolLogsPage'
 import KbPage from './pages/KbPage'
+import DimPage from './pages/DimPage'
 
 // 控制台壳（迭代 H）：鉴权门 + AdminLayout + 按 hash 切换子页。
 // - 未登录渲染登录卡片（hash 保持目标子页，登录成功后自动落在目标子页，AC-2）；
@@ -26,6 +27,7 @@ export default function AdminConsole() {
           {page === 'mcp' && <McpServersPage />}
           {page === 'logs' && <ToolLogsPage />}
           {page === 'kb' && <KbPage />}
+          {page === 'dim' && <DimPage />}
         </AdminLayout>
       )}
     </div>

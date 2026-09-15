@@ -27,6 +27,10 @@ class AdminGateResolverTest {
         assertThat(resolver.gateFor("/api/admin/kb")).isEqualTo(AdminGateResolver.Gate.RAG);
         assertThat(resolver.gateFor("/api/admin/kb/documents")).isEqualTo(AdminGateResolver.Gate.RAG);
         assertThat(resolver.gateFor("/api/admin/kb/health")).isEqualTo(AdminGateResolver.Gate.RAG);
+        // 迭代10 追加：维度维护随 RAG 闸门（dim_project 存于 rag PG 库）
+        assertThat(resolver.gateFor("/api/admin/dim")).isEqualTo(AdminGateResolver.Gate.RAG);
+        assertThat(resolver.gateFor("/api/admin/dim/projects")).isEqualTo(AdminGateResolver.Gate.RAG);
+        assertThat(resolver.gateFor("/api/admin/dim/tags")).isEqualTo(AdminGateResolver.Gate.RAG);
     }
 
     @Test

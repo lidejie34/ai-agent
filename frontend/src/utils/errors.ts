@@ -60,6 +60,12 @@ export function adminErrorText(e: { code: string; message?: string }): string {
       return e.message && e.message.trim() ? e.message : '标签非法：仅支持中文/字母/数字/中划线/下划线，单个 ≤ 32 字符，最多 8 个'
     case 'KB_NOT_FOUND':
       return '文档不存在或已被删除'
+    case 'KB_PROJECT_EXISTS':
+      return e.message && e.message.trim() ? e.message : '项目已存在，请换一个名称'
+    case 'KB_PROJECT_IN_USE':
+      return e.message && e.message.trim() ? e.message : '项目仍被文档引用，无法删除'
+    case 'KB_PROJECT_NOT_FOUND':
+      return e.message && e.message.trim() ? e.message : '项目不存在或已被删除'
     case 'KB_EMBEDDING_FAILED':
       return '向量化失败（Embedding 服务不可用），可稍后在列表中重建索引'
     case 'KB_STORE_FAILED':

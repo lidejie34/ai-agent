@@ -3,6 +3,7 @@ package com.dj.ai.agentchat.rag.admin.service;
 import com.dj.ai.agentchat.rag.RagProperties;
 import com.dj.ai.agentchat.rag.admin.KbAdminException;
 import com.dj.ai.agentchat.rag.chunk.TextChunker;
+import com.dj.ai.agentchat.rag.dim.DimRepository;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingException;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingService;
 import com.dj.ai.agentchat.rag.schema.RagSchemaInitializer;
@@ -43,17 +44,20 @@ public class KbDocumentService {
     private final TextChunker chunker;
     private final RagProperties properties;
     private final RagSchemaInitializer schemaInitializer;
+    private final DimRepository dimRepository;
 
     public KbDocumentService(KbRepository repository,
                              RagEmbeddingService embeddingService,
                              TextChunker chunker,
                              RagProperties properties,
-                             RagSchemaInitializer schemaInitializer) {
+                             RagSchemaInitializer schemaInitializer,
+                             DimRepository dimRepository) {
         this.repository = repository;
         this.embeddingService = embeddingService;
         this.chunker = chunker;
         this.properties = properties;
         this.schemaInitializer = schemaInitializer;
+        this.dimRepository = dimRepository;
     }
 
     /** 上传并同步完成切片+向量化；成功返回 READY 文档视图（不含原文）。迭代6 签名（无维度元数据）。 */
@@ -64,11 +68,13 @@ public class KbDocumentService {
     /**
      * 上传打标（迭代10 规范签名）：维度元数据先于解码/向量化校验（fail-fast 不浪费 embedding）；
      * 同名覆盖以新上传的 project/tags 为准。
+     * 迭代10 追加：项目受管——非空项目必须已存在于 dim_project（维度维护页创建）。
      */
     public RagDocument upload(String originalFileName, byte[] bytes,
                               String project, List<String> tags) {
         schemaInitializer.ensureSchema();
         String normalizedProject = normalizeProjectMeta(project);
+        requireManagedProject(normalizedProject);
         List<String> normalizedTags = normalizeTagsMeta(tags);
         String fileName = sanitizeFileName(originalFileName);
         validateExtension(fileName);
@@ -135,6 +141,7 @@ public class KbDocumentService {
     public RagDocument updateMeta(long id, String project, List<String> tags) {
         schemaInitializer.ensureSchema();
         String normalizedProject = normalizeProjectMeta(project);
+        requireManagedProject(normalizedProject);
         List<String> normalizedTags = normalizeTagsMeta(tags);
         try {
             int rows = repository.updateMeta(id, normalizedProject, normalizedTags);
@@ -217,6 +224,17 @@ public class KbDocumentService {
                     properties.getMeta().getMaxProjectLength());
         } catch (KbMetaValidator.KbMetaInvalidException e) {
             throw new KbAdminException(KB_INVALID_PROJECT, e.getMessage());
+        }
+    }
+
+    /**
+     * 项目受管校验（迭代10 追加）：非空项目必须已存在于 dim_project，
+     * 否则 400 KB_INVALID_PROJECT 并提示去维度维护页创建；null（未打标）放行。
+     */
+    private void requireManagedProject(String normalizedProject) {
+        if (normalizedProject != null && !dimRepository.projectExists(normalizedProject)) {
+            throw new KbAdminException(KB_INVALID_PROJECT,
+                    "项目不存在，请先在「维度维护」页创建项目：" + normalizedProject);
         }
     }
 

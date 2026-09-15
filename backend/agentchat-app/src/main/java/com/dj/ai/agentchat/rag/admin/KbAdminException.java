@@ -24,6 +24,12 @@ public class KbAdminException extends RuntimeException {
     public static final String KB_INVALID_PROJECT = "KB_INVALID_PROJECT";
     /** 标签非法（400，迭代10）。 */
     public static final String KB_INVALID_TAGS = "KB_INVALID_TAGS";
+    /** 项目重名（409，迭代10 追加·维度维护）。 */
+    public static final String KB_PROJECT_EXISTS = "KB_PROJECT_EXISTS";
+    /** 项目被文档引用、禁止删除（409，迭代10 追加·维度维护）。 */
+    public static final String KB_PROJECT_IN_USE = "KB_PROJECT_IN_USE";
+    /** 项目不存在（404，迭代10 追加·维度维护）。 */
+    public static final String KB_PROJECT_NOT_FOUND = "KB_PROJECT_NOT_FOUND";
 
     private final String code;
 

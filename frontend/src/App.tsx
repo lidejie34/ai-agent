@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Switch, message } from 'antd'
 import AppLayout from './components/AppLayout'
 import SessionSidebar from './components/SessionSidebar'
@@ -6,7 +6,9 @@ import MessageList from './components/MessageList'
 import EmptyState from './components/EmptyState'
 import ChatInput from './components/ChatInput'
 import InlineError from './components/InlineError'
+import KbFilterBar, { type KbFilterValue } from './components/KbFilterBar'
 import { useChatStream } from './hooks/useChatStream'
+import { useKbDimensions } from './hooks/useKbDimensions'
 import { useSessions } from './hooks/useSessions'
 import { useLocalDraft } from './hooks/useLocalDraft'
 import { readStoredSessionId, writeStoredSessionId } from './utils/storage'
@@ -18,6 +20,10 @@ export default function App() {
   const chat = useChatStream({ onSessionsChanged: sessions.refresh })
   // 草稿按会话作用域隔离（无当前会话时用 'global'）
   const { draft, setDraft } = useLocalDraft(chat.currentSessionId ?? 'global')
+  // 知识库维度过滤（迭代10 追加）：选择器选项来自 /api/kb/dimensions，
+  // 维度不可用（RAG 关/未维护）时选择器整体隐藏；值为页面级状态，随每轮发送
+  const kbDims = useKbDimensions()
+  const [kbFilter, setKbFilter] = useState<KbFilterValue>({ tags: [] })
 
   // 刷新恢复：记忆模式下从 localStorage 读上次会话，拉历史回填；
   // 404（会话已删）静默回空态并清除记录；其他失败也不打断首屏。
@@ -90,7 +96,7 @@ export default function App() {
   }
 
   const handleSend = (text: string) => {
-    void chat.send(text)
+    void chat.send(text, kbFilter)
     setDraft('')
   }
 
@@ -99,7 +105,7 @@ export default function App() {
       message.warning(STREAMING_BLOCK_MESSAGE)
       return
     }
-    void chat.send(prompt)
+    void chat.send(prompt, kbFilter)
   }
 
   return (
@@ -146,6 +152,15 @@ export default function App() {
         )}
       </div>
       <InlineError error={chat.lastError} onClose={chat.dismissError} />
+      {kbDims.available && (
+        <KbFilterBar
+          projects={kbDims.projects}
+          tags={kbDims.tags}
+          value={kbFilter}
+          onChange={setKbFilter}
+          disabled={chat.isStreaming}
+        />
+      )}
       <ChatInput
         value={draft}
         onChange={setDraft}

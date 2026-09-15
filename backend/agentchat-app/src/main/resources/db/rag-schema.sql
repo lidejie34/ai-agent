@@ -42,3 +42,14 @@ ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[
 
 CREATE INDEX IF NOT EXISTS idx_rag_doc_project ON rag_document (project);
 CREATE INDEX IF NOT EXISTS idx_rag_doc_tags ON rag_document USING gin (tags);
+
+-- 迭代10 追加：维度项目受管表——项目必须先在此维护，上传/编辑/过滤/聊天全部引用
+-- 既有值（rag_document.project 按名称字符串松耦合，不改外键，改名由服务层联动更新）。
+-- 命名 dim_ 前缀（非 kb_）：后续工具调度（MySQL 侧）挂项目/角色时复用同一份数据。
+CREATE TABLE IF NOT EXISTS dim_project (
+    id         BIGSERIAL PRIMARY KEY,
+    name       VARCHAR(64) NOT NULL UNIQUE,
+    remark     VARCHAR(255) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);

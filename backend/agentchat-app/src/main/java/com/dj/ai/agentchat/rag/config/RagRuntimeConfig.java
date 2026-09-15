@@ -5,6 +5,8 @@ import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
 import com.dj.ai.agentchat.rag.admin.service.KbDocumentService;
 import com.dj.ai.agentchat.rag.admin.service.KbHealthService;
 import com.dj.ai.agentchat.rag.chunk.TextChunker;
+import com.dj.ai.agentchat.rag.dim.DimAdminService;
+import com.dj.ai.agentchat.rag.dim.DimRepository;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingService;
 import com.dj.ai.agentchat.rag.schema.RagSchemaInitializer;
 import com.dj.ai.agentchat.rag.schema.RagSchemaStartupRunner;
@@ -175,15 +177,30 @@ public class RagRuntimeConfig {
         return new KbRepository(ragJdbcTemplate);
     }
 
+    /** 维度维护仓储（迭代10 追加）：dim_project CRUD + 标签派生视图联动。 */
+    @Bean
+    public DimRepository dimRepository(@Qualifier("ragJdbcTemplate") JdbcTemplate ragJdbcTemplate) {
+        return new DimRepository(ragJdbcTemplate);
+    }
+
+    /** 维度维护编排（迭代10 追加）：项目改名联动/引用中禁删/标签改名删除联动。 */
+    @Bean
+    public DimAdminService dimAdminService(DimRepository dimRepository,
+                                           RagProperties properties,
+                                           RagSchemaInitializer ragSchemaInitializer) {
+        return new DimAdminService(dimRepository, properties, ragSchemaInitializer);
+    }
+
     /** 管理端文档编排：校验/解码/切片/embedding/落库，FAILED 行可重试。 */
     @Bean
     public KbDocumentService kbDocumentService(KbRepository kbRepository,
                                                RagEmbeddingService ragEmbeddingService,
                                                TextChunker ragTextChunker,
                                                RagProperties properties,
-                                               RagSchemaInitializer ragSchemaInitializer) {
+                                               RagSchemaInitializer ragSchemaInitializer,
+                                               DimRepository dimRepository) {
         return new KbDocumentService(kbRepository, ragEmbeddingService, ragTextChunker,
-                properties, ragSchemaInitializer);
+                properties, ragSchemaInitializer, dimRepository);
     }
 
     /**
