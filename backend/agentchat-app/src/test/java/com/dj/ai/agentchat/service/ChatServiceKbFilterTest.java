@@ -19,6 +19,7 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -99,6 +100,25 @@ class ChatServiceKbFilterTest {
 
         verify(spec).advisors(advisor); // advisor 照常挂载
         verify(spec, never()).advisors(any(Consumer.class)); // 但无 param 注入
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void tagsOnlyFilter_skipsNullProjectParam() {
+        // Spring AI AdvisorSpec.param 断言 value 非空：project=null 时只能缺省注入（冒烟实证 NPE）
+        RagAdvisor advisor = mock(RagAdvisor.class);
+        ChatService service = serviceWithRag(advisor);
+
+        service.chat(new ChatRequest("承运规则", null, null, null, null, List.of("承运")));
+
+        org.mockito.ArgumentCaptor<Consumer<ChatClient.AdvisorSpec>> captor =
+                org.mockito.ArgumentCaptor.forClass(Consumer.class);
+        verify(spec).advisors(captor.capture());
+        ChatClient.AdvisorSpec advisorSpec = mock(ChatClient.AdvisorSpec.class);
+        when(advisorSpec.param(any(String.class), any())).thenReturn(advisorSpec);
+        captor.getValue().accept(advisorSpec);
+        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_PROJECT), any());
+        verify(advisorSpec).param(RagAdvisor.PARAM_KB_TAGS, List.of("承运"));
     }
 
     @Test

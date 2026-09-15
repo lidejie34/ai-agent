@@ -24,6 +24,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -113,6 +114,23 @@ class ExecutorClientKbFilterTest {
         assertThat(o.ok()).isTrue();
         verify(spec).advisors(advisor);
         verify(spec, never()).advisors(any(Consumer.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void tagsOnlyFilter_skipsNullProjectParam() {
+        TaskOutcome o = client.execute(task, null, ctx(), 0,
+                new KbFilter(null, List.of("承运")));
+
+        assertThat(o.ok()).isTrue();
+        ArgumentCaptor<Consumer<ChatClient.AdvisorSpec>> captor =
+                ArgumentCaptor.forClass(Consumer.class);
+        verify(spec).advisors(captor.capture());
+        ChatClient.AdvisorSpec advisorSpec = mock(ChatClient.AdvisorSpec.class);
+        when(advisorSpec.param(anyString(), any())).thenReturn(advisorSpec);
+        captor.getValue().accept(advisorSpec);
+        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_PROJECT), any());
+        verify(advisorSpec).param(RagAdvisor.PARAM_KB_TAGS, List.of("承运"));
     }
 
     @Test

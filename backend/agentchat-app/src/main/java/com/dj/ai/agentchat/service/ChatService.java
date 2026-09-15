@@ -478,8 +478,13 @@ public class ChatService {
             spec.advisors(advisor);
             // 迭代10：携带维度过滤时注入 advisor param（不过滤不注入——请求形态与迭代9 逐字节一致）
             if (kbFilter != null && kbFilter.present()) {
-                spec.advisors(a -> a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project())
-                        .param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags()));
+                spec.advisors(a -> {
+                    // Spring AI Assert.notNull(value)：project 为 null 只能缺省注入（冒烟实证 NPE）
+                    if (kbFilter.project() != null) {
+                        a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project());
+                    }
+                    a.param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags());
+                });
             }
         }
     }

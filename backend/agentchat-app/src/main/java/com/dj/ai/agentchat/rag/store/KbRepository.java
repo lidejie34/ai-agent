@@ -51,13 +51,20 @@ public class KbRepository {
              LIMIT ?
             """;
 
-    /** 迭代10 过滤检索 SQL：doc 维 prefilter（project 等值；tags `?|` 任一命中）。 */
+    /**
+     * 迭代10 过滤检索 SQL：doc 维 prefilter（project 等值；tags `?|` 任一命中）。
+     * 注意 `??|` 双写：pgjdbc 把单个 ? 解析为占位符，双写转义为字面操作符
+     * （驱动层转换，GIN 索引语义不变）——冒烟实证单写会 500。
+     * 所有可空参数显式 `?::varchar/?::text`：Java 传 null 时驱动按 unspecified
+     * OID 上报，PG 在 `? IS NULL`/操作符上下文不做类型推断（could not determine
+     * data type of parameter）——冒烟实证。
+     */
     private static final String SEARCH_SQL_FILTERED = """
             SELECT file_name, content, 1 - (embedding <=> ?::vector) AS score
               FROM rag_chunk
              WHERE doc_id IN (SELECT id FROM rag_document
-                               WHERE (? IS NULL OR project = ?)
-                                 AND (? IS NULL OR tags ?| string_to_array(?, ',')))
+                               WHERE (?::varchar IS NULL OR project = ?::varchar)
+                                 AND (?::text IS NULL OR tags ??| string_to_array(?::text, ',')))
              ORDER BY embedding <=> ?::vector
              LIMIT ?
             """;
@@ -70,13 +77,13 @@ public class KbRepository {
              ORDER BY id DESC
             """;
 
-    /** 迭代10 过滤列表 SQL：project 等值 + 单标签包含（`?` 操作符），组合 AND。 */
+    /** 迭代10 过滤列表 SQL：project 等值 + 单标签包含（`?` 操作符双写转义，同上），组合 AND。 */
     private static final String LIST_SQL_FILTERED = """
             SELECT id, file_name, size_bytes, NULL AS content, content_hash,
                    chunk_count, status, error, created_at, updated_at, project, tags
               FROM rag_document
-             WHERE (? IS NULL OR project = ?)
-               AND (? IS NULL OR tags ? ?)
+             WHERE (?::varchar IS NULL OR project = ?::varchar)
+               AND (?::text IS NULL OR tags ?? ?::text)
              ORDER BY id DESC
             """;
 

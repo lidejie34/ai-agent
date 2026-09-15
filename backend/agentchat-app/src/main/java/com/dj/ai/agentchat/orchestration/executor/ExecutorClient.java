@@ -148,8 +148,13 @@ public class ExecutorClient {
                     // 迭代10：请求级知识库过滤（OrchInput 透传）；无过滤不注入 param——
                     // 请求形态与迭代9 逐字节一致
                     if (kbFilter != null && kbFilter.present()) {
-                        spec.advisors(a -> a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project())
-                                .param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags()));
+                        spec.advisors(a -> {
+                            // 同上：null project 只能缺省注入（Assert.notNull）
+                            if (kbFilter.project() != null) {
+                                a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project());
+                            }
+                            a.param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags());
+                        });
                     }
                 }
                 PlannerClient.applyRoleOptions(spec, props.getExecutor());

@@ -121,7 +121,7 @@ class KbRepositoryMetaTest {
         repository.search(new float[]{0.1f}, 4, null, List.of("售后"));
 
         ArgumentCaptor<Object[]> params = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc).query(contains("tags ?| string_to_array(?, ',')"),
+        verify(jdbc).query(contains("tags ??| string_to_array(?::text, ',')"),
                 any(org.springframework.jdbc.core.RowMapper.class), params.capture());
         Object[] args = params.getValue();
         assertThat(args[1]).isNull();
@@ -133,7 +133,7 @@ class KbRepositoryMetaTest {
         repository.listDocuments("订单域", "售后");
 
         ArgumentCaptor<Object[]> params = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc).query(contains("tags ? ?"), any(org.springframework.jdbc.core.RowMapper.class),
+        verify(jdbc).query(contains("tags ?? ?::text"), any(org.springframework.jdbc.core.RowMapper.class),
                 params.capture());
         assertThat(params.getValue()).containsExactly("订单域", "订单域", "售后", "售后");
     }
