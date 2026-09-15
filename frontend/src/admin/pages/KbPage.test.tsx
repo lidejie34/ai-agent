@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { message } from 'antd'
 import KbPage from './KbPage'
 import { clearAdminToken, persistAdminToken } from '../auth'
 import { apiErrorResponse, jsonResponse } from '../testHelpers'
@@ -8,6 +9,7 @@ import type { KbDocument, KbHealth } from '../types'
 
 // T11（迭代6）：知识库管理页——健康 Alert（手动刷新/无轮询）、multipart 上传、
 // 列表字段/FAILED 行、重建索引、删除（Popconfirm 二次确认）、KB_* 错误文案。
+// 迭代10：项目/标签两列、过滤区（查询/重置）、上传弹窗打标、编辑标签弹窗 PATCH 全量替换。
 
 const healthy = (over: Partial<KbHealth> = {}): KbHealth => ({
   enabled: true,
@@ -42,11 +44,15 @@ const failedDoc = doc({
 beforeEach(() => {
   clearAdminToken()
   persistAdminToken('tok-x')
+  message.destroy()
 })
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
   clearAdminToken()
+  // 注意：jsdom 无 CSS 过渡，rc-notification 离场动画永不完成，message.destroy()
+  // 实际无法移除节点——同文案 toast 会跨用例残留，断言一律用 findAllByText 兜底
+  message.destroy()
 })
 
 function stubFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
@@ -136,9 +142,9 @@ describe('知识库页：文档表格', () => {
     expect(await screen.findAllByText('失败')).toHaveLength(1)
     expect(screen.getByText('broken.txt')).toBeInTheDocument()
     const icon = await screen.findByTestId('kb-row-error-icon')
-    // 切片数列为「-」而非 0
+    // 切片数列为「-」而非 0（迭代10：0=ID,1=文件名,2=项目,3=标签,4=大小,5=切片数）
     const cells = icon.closest('tr')?.querySelectorAll('td')
-    expect(cells?.[3]).toHaveTextContent('-')
+    expect(cells?.[5]).toHaveTextContent('-')
 
     await userEvent.hover(icon)
     expect(await screen.findByText(/connect ECONNREFUSED 127\.0\.0\.1:11434/)).toBeInTheDocument()
@@ -174,8 +180,23 @@ describe('知识库页：文档表格', () => {
   })
 })
 
+/** 打开上传弹窗并选中文件（迭代10：上传迁入弹窗，文件本地暂存待「上传」提交）。 */
+async function openUploadAndPick(file: File) {
+  await userEvent.click(screen.getByTestId('kb-upload'))
+  await screen.findByText('选择文件')
+  await act(async () => {
+    fireEvent.change(fileInput(), { target: { files: [file] } })
+  })
+  expect(await screen.findByTestId('kb-upload-filename')).toHaveTextContent(`已选择：${file.name}`)
+}
+
+/** 弹窗底部主按钮（上传/保存）。 */
+function modalOk(): HTMLElement {
+  return document.querySelector('.ant-modal-footer .ant-btn-primary') as HTMLElement
+}
+
 describe('知识库页：上传', () => {
-  it('选择 md 文件 → POST multipart（字段 file、无手设 Content-Type、带 token）→ 成功提示并刷新列表/健康', async () => {
+  it('弹窗选 md 文件 → POST multipart（字段 file、无手设 Content-Type、带 token）→ 成功提示并刷新列表/健康', async () => {
     const fn = stubDefault(healthy(), [], {
       // POST /api/admin/kb/documents → 201 READY 视图
       '/api/admin/kb/documents': jsonResponse(doc({ id: 7, fileName: '差旅制度.md' }), 201),
@@ -186,10 +207,8 @@ describe('知识库页：上传', () => {
     await screen.findByText('知识库服务正常')
     expect(fn).toHaveBeenCalledTimes(2)
 
-    const file = new File(['# 差旅制度\n正文'], '差旅制度.md', { type: 'text/markdown' })
-    await act(async () => {
-      fireEvent.change(fileInput(), { target: { files: [file] } })
-    })
+    await openUploadAndPick(new File(['# 差旅制度\n正文'], '差旅制度.md', { type: 'text/markdown' }))
+    await userEvent.click(modalOk())
 
     await waitFor(() => {
       const posts = fn.mock.calls.filter(
@@ -202,6 +221,9 @@ describe('知识库页：上传', () => {
       expect(init.headers).toEqual({ 'X-Admin-Token': 'tok-x' })
     })
     expect(appendSpy).toHaveBeenCalledWith('file', expect.any(File))
+    // 未填 meta：不带 project/tags 字段
+    expect(appendSpy.mock.calls.map((c) => c[0])).not.toContain('project')
+    expect(appendSpy.mock.calls.map((c) => c[0])).not.toContain('tags')
     expect(await screen.findByText(/上传并向量化完成/)).toBeInTheDocument()
 
     // 上传成功后文档列表 + 健康计数都重拉：mount 2 + POST 1 + 刷新 2
@@ -217,6 +239,43 @@ describe('知识库页：上传', () => {
     appendSpy.mockRestore()
   })
 
+  it('上传带项目/标签：form 附 project 与逗号拼接 tags（trim/去空白）', async () => {
+    stubDefault(healthy(), [], {
+      '/api/admin/kb/documents': jsonResponse(doc({ id: 8, fileName: '售后.md' }), 201),
+    })
+    const appendSpy = vi.spyOn(FormData.prototype, 'append')
+
+    render(<KbPage />)
+    await screen.findByText('知识库服务正常')
+    await openUploadAndPick(new File(['内容'], '售后.md', { type: 'text/markdown' }))
+    fireEvent.change(screen.getByTestId('kb-upload-project'), { target: { value: ' 订单域 ' } })
+    fireEvent.change(screen.getByTestId('kb-upload-tags'), { target: { value: '售后, 退货，,售后' } })
+    await userEvent.click(modalOk())
+
+    await waitFor(() => expect(appendSpy).toHaveBeenCalledWith('project', '订单域'))
+    expect(appendSpy).toHaveBeenCalledWith('tags', '售后,退货')
+    // 前序用例的成功 toast 可能仍挂在 body：断言本用例文件名
+    expect(await screen.findByText(/「售后\.md」上传并向量化完成/)).toBeInTheDocument()
+    appendSpy.mockRestore()
+  })
+
+  it('上传 meta 非法（项目含逗号）：前端预检拦截，不发 POST', async () => {
+    const fn = stubDefault(healthy(), [], {
+      '/api/admin/kb/documents': jsonResponse(doc(), 201),
+    })
+    render(<KbPage />)
+    await screen.findByText('知识库服务正常')
+    const before = fn.mock.calls.length
+
+    await openUploadAndPick(new File(['x'], 'a.md', { type: 'text/markdown' }))
+    fireEvent.change(screen.getByTestId('kb-upload-project'), { target: { value: '含,逗号' } })
+    await userEvent.click(modalOk())
+
+    expect(await screen.findByText(/项目名仅支持中文\/字母\/数字\/中划线\/下划线/)).toBeInTheDocument()
+    expect(fn.mock.calls.filter((c) => (c[1] as RequestInit)?.method === 'POST')).toHaveLength(0)
+    expect(fn.mock.calls.length).toBe(before)
+  })
+
   it('上传 502 KB_EMBEDDING_FAILED：错误 message 走中文映射，列表不被清空', async () => {
     stubFetch((url, init) => {
       const method = init?.method ?? 'GET'
@@ -229,22 +288,231 @@ describe('知识库页：上传', () => {
     render(<KbPage />)
     await screen.findByText('差旅制度.md')
 
-    await act(async () => {
-      fireEvent.change(fileInput(), {
-        target: { files: [new File(['x'], 'a.md', { type: 'text/markdown' })] },
-      })
-    })
+    await openUploadAndPick(new File(['x'], 'a.md', { type: 'text/markdown' }))
+    await userEvent.click(modalOk())
 
     expect(await screen.findByText('向量化失败（Embedding 服务不可用），可稍后在列表中重建索引')).toBeInTheDocument()
     expect(screen.getByText('差旅制度.md')).toBeInTheDocument()
   })
 
-  it('上传控件仅接受 .md/.markdown/.txt 且单选', () => {
+  it('上传控件仅接受 .md/.markdown/.txt 且单选', async () => {
     stubDefault(healthy(), [])
     render(<KbPage />)
+    await userEvent.click(await screen.findByTestId('kb-upload'))
     const input = fileInput()
     expect(input).toHaveAttribute('accept', '.md,.markdown,.txt')
     expect(input).not.toHaveAttribute('multiple') // multiple={false}：单文件上传
+  })
+})
+
+describe('知识库页：项目/标签列与过滤（迭代10）', () => {
+  it('列表渲染项目/标签两列；缺省显示「-」', async () => {
+    stubDefault(healthy(), [
+      doc({ id: 1, project: '订单域', tags: ['售后', '退货'] }),
+      doc({ id: 2, fileName: '无标.md' }),
+    ])
+    render(<KbPage />)
+
+    await screen.findByText('差旅制度.md')
+    expect(screen.getByText('订单域')).toBeInTheDocument()
+    expect(screen.getByText('售后')).toBeInTheDocument()
+    expect(screen.getByText('退货')).toBeInTheDocument()
+    const plainRow = (await screen.findByText('无标.md')).closest('tr')
+    expect(plainRow?.querySelectorAll('td')[2]).toHaveTextContent('-')
+    expect(plainRow?.querySelectorAll('td')[3]).toHaveTextContent('-')
+  })
+
+  it('过滤查询：GET documents 带 project/tag 查询参数', async () => {
+    const fn = stubDefault(healthy(), [doc({ project: '订单域', tags: ['售后'] })])
+    render(<KbPage />)
+    await screen.findByText('差旅制度.md')
+
+    fireEvent.change(screen.getByTestId('kb-filter-project'), { target: { value: '订单域' } })
+    fireEvent.change(screen.getByTestId('kb-filter-tag'), { target: { value: '售后' } })
+    await userEvent.click(screen.getByTestId('kb-filter-apply'))
+
+    await waitFor(() => {
+      const filtered = fn.mock.calls.filter((c) => (c[0] as string).includes('project='))
+      expect(filtered).toHaveLength(1)
+      const u = new URL(filtered[0][0] as string, 'http://localhost')
+      expect(u.searchParams.get('project')).toBe('订单域')
+      expect(u.searchParams.get('tag')).toBe('售后')
+    })
+  })
+
+  it('重置：清空输入并重新全量查询（无查询参数）', async () => {
+    const fn = stubDefault(healthy(), [doc()])
+    render(<KbPage />)
+    await screen.findByText('差旅制度.md')
+
+    fireEvent.change(screen.getByTestId('kb-filter-tag'), { target: { value: '售后' } })
+    await userEvent.click(screen.getByTestId('kb-filter-apply'))
+    await waitFor(() =>
+      expect(fn.mock.calls.some((c) => (c[0] as string).includes('tag='))).toBe(true),
+    )
+
+    await userEvent.click(screen.getByTestId('kb-filter-reset'))
+    await waitFor(() => {
+      const last = fn.mock.calls[fn.mock.calls.length - 1]
+      expect((last[0] as string).endsWith('/documents')).toBe(true)
+    })
+    expect(screen.getByTestId('kb-filter-project')).toHaveValue('')
+    expect(screen.getByTestId('kb-filter-tag')).toHaveValue('')
+  })
+
+  it('过滤值非法（标签含空格）：前端预检拦截，不发请求', async () => {
+    const fn = stubDefault(healthy(), [doc()])
+    render(<KbPage />)
+    await screen.findByText('差旅制度.md')
+    const before = fn.mock.calls.length
+
+    fireEvent.change(screen.getByTestId('kb-filter-tag'), { target: { value: '售 后' } })
+    await userEvent.click(screen.getByTestId('kb-filter-apply'))
+
+    expect(await screen.findByText(/标签「售 后」非法/)).toBeInTheDocument()
+    expect(fn.mock.calls.length).toBe(before)
+  })
+
+  it('过滤后无结果：Empty 过滤文案', async () => {
+    stubFetch((url, init) => {
+      const method = init?.method ?? 'GET'
+      if (url.includes('/health')) return jsonResponse(healthy())
+      if (url.includes('/documents') && method === 'GET') return jsonResponse([])
+      return new Response('nf', { status: 404 })
+    })
+    render(<KbPage />)
+    await screen.findByText('知识库暂无文档，请上传 Markdown / TXT 文件')
+
+    fireEvent.change(screen.getByTestId('kb-filter-project'), { target: { value: '订单域' } })
+    await userEvent.click(screen.getByTestId('kb-filter-apply'))
+
+    expect(await screen.findByText('没有匹配过滤条件的文档，可调整项目/标签后重新查询')).toBeInTheDocument()
+  })
+
+  it('列表过滤 400 KB_INVALID_TAGS：错误区透传后端文案', async () => {
+    stubFetch((url, init) => {
+      const method = init?.method ?? 'GET'
+      if (url.includes('/health')) return jsonResponse(healthy())
+      if (url.includes('tag=') && method === 'GET')
+        return apiErrorResponse('KB_INVALID_TAGS', '标签仅支持中文/字母/数字/中划线/下划线：「x,y」', 400)
+      if (url.endsWith('/documents')) return jsonResponse([doc()])
+      return new Response('nf', { status: 404 })
+    })
+    render(<KbPage />)
+    await screen.findByText('差旅制度.md')
+
+    // 绕过前端预检：直接构造合法预检但后端拒绝的场景（此处用合法值，桩按 tag= 拒绝）
+    fireEvent.change(screen.getByTestId('kb-filter-tag'), { target: { value: 'xy' } })
+    await userEvent.click(screen.getByTestId('kb-filter-apply'))
+
+    expect(await screen.findByText('文档列表加载失败')).toBeInTheDocument()
+    expect(screen.getByText(/标签仅支持中文\/字母\/数字\/中划线\/下划线/)).toBeInTheDocument()
+  })
+})
+
+describe('知识库页：编辑标签弹窗（迭代10 PATCH 全量替换）', () => {
+  it('打开预填现有 project/tags；修改保存 → PATCH body 全量 → 成功提示并刷新', async () => {
+    const fn = stubFetch((url, init) => {
+      const method = init?.method ?? 'GET'
+      if (url.includes('/health')) return jsonResponse(healthy())
+      if (url.endsWith('/documents/1') && method === 'PATCH')
+        return jsonResponse(doc({ id: 1, project: '物流域', tags: ['承运'] }))
+      if (url.endsWith('/documents') && method === 'GET')
+        return jsonResponse([doc({ id: 1, project: '订单域', tags: ['售后', '退货'] })])
+      return new Response('nf', { status: 404 })
+    })
+    render(<KbPage />)
+    await screen.findByText('订单域')
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑标签' }))
+    // 预填
+    expect(await screen.findByTestId('kb-meta-project')).toHaveValue('订单域')
+    expect(screen.getByTestId('kb-meta-tags')).toHaveValue('售后,退货')
+
+    fireEvent.change(screen.getByTestId('kb-meta-project'), { target: { value: '物流域' } })
+    fireEvent.change(screen.getByTestId('kb-meta-tags'), { target: { value: '承运' } })
+    await userEvent.click(modalOk())
+
+    await waitFor(() => {
+      const patches = fn.mock.calls.filter((c) => (c[1] as RequestInit).method === 'PATCH')
+      expect(patches).toHaveLength(1)
+      expect(patches[0][0]).toBe('/api/admin/kb/documents/1')
+      expect(JSON.parse(patches[0][1]?.body as string)).toEqual({ project: '物流域', tags: ['承运'] })
+    })
+    expect(await screen.findByText(/的项目\/标签已更新/)).toBeInTheDocument()
+    // 保存后重拉列表
+    await waitFor(() =>
+      expect(
+        fn.mock.calls.filter(
+          (c) => c[0].endsWith('/documents') && ((c[1] as RequestInit).method ?? 'GET') === 'GET',
+        ).length,
+      ).toBeGreaterThanOrEqual(2),
+    )
+  })
+
+  it('清空项目/标签保存 → PATCH body { project: null, tags: [] }', async () => {
+    const fn = stubFetch((url, init) => {
+      const method = init?.method ?? 'GET'
+      if (url.includes('/health')) return jsonResponse(healthy())
+      if (url.endsWith('/documents/1') && method === 'PATCH') return jsonResponse(doc({ id: 1 }))
+      if (url.endsWith('/documents') && method === 'GET')
+        return jsonResponse([doc({ id: 1, project: '订单域', tags: ['售后'] })])
+      return new Response('nf', { status: 404 })
+    })
+    render(<KbPage />)
+    await screen.findByText('订单域')
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑标签' }))
+    await screen.findByTestId('kb-meta-project')
+    fireEvent.change(screen.getByTestId('kb-meta-project'), { target: { value: '' } })
+    fireEvent.change(screen.getByTestId('kb-meta-tags'), { target: { value: '' } })
+    await userEvent.click(modalOk())
+
+    await waitFor(() => {
+      const patches = fn.mock.calls.filter((c) => (c[1] as RequestInit).method === 'PATCH')
+      expect(patches).toHaveLength(1)
+      expect(JSON.parse(patches[0][1]?.body as string)).toEqual({ project: null, tags: [] })
+    })
+  })
+
+  it('PATCH 400 KB_INVALID_PROJECT：透传后端 message', async () => {
+    stubFetch((url, init) => {
+      const method = init?.method ?? 'GET'
+      if (url.includes('/health')) return jsonResponse(healthy())
+      if (method === 'PATCH')
+        return apiErrorResponse('KB_INVALID_PROJECT', '项目名仅支持中文/字母/数字/中划线/下划线：「xx」', 400)
+      if (url.endsWith('/documents')) return jsonResponse([doc({ id: 1, project: '订单域' })])
+      return new Response('nf', { status: 404 })
+    })
+    render(<KbPage />)
+    await screen.findByText('订单域')
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑标签' }))
+    await screen.findByTestId('kb-meta-project')
+    fireEvent.change(screen.getByTestId('kb-meta-project'), { target: { value: '新域' } })
+    await userEvent.click(modalOk())
+
+    expect(await screen.findByText(/项目名仅支持中文\/字母\/数字\/中划线\/下划线：「xx」/)).toBeInTheDocument()
+  })
+
+  it('PATCH 404 KB_NOT_FOUND：提示已被删除并关闭弹窗刷新', async () => {
+    const fn = stubFetch((url, init) => {
+      const method = init?.method ?? 'GET'
+      if (url.includes('/health')) return jsonResponse(healthy())
+      if (method === 'PATCH') return apiErrorResponse('KB_NOT_FOUND', '文档不存在', 404)
+      if (url.endsWith('/documents')) return jsonResponse([doc({ id: 1 })])
+      return new Response('nf', { status: 404 })
+    })
+    render(<KbPage />)
+    await screen.findByText('差旅制度.md')
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑标签' }))
+    await screen.findByTestId('kb-meta-project')
+    const before = fn.mock.calls.length
+    await userEvent.click(modalOk())
+
+    expect(await screen.findAllByText('文档已被删除')).not.toHaveLength(0)
+    await waitFor(() => expect(fn.mock.calls.length).toBeGreaterThan(before))
   })
 })
 
@@ -306,7 +574,9 @@ describe('知识库页：重建 / 删除 / 刷新 / 轮询', () => {
     const popupOk = document.querySelector('.ant-popconfirm .ant-btn-dangerous') as HTMLElement
     await userEvent.click(popupOk)
 
-    expect(await screen.findByText('文档已被删除')).toBeInTheDocument()
+    // jsdom 中前序用例同文案 toast 残留：findAllByText 兜底；严格性由 DELETE 恰好一次保证
+    expect(await screen.findAllByText('文档已被删除')).not.toHaveLength(0)
+    expect(fn2.mock.calls.filter((c) => (c[1] as RequestInit)?.method === 'DELETE')).toHaveLength(1)
     await waitFor(() => expect(fn2.mock.calls.length).toBeGreaterThan(before))
   })
 

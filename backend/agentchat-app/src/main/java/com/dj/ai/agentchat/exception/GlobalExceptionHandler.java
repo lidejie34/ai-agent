@@ -31,6 +31,12 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "BAD_REQUEST", e.getMessage());
     }
 
+    @ExceptionHandler(InvalidKbFilterException.class)
+    public ResponseEntity<ApiError> handleInvalidKbFilter(InvalidKbFilterException e) {
+        log.warn("知识库过滤参数错误: {}", e.getMessage());
+        return build(HttpStatus.BAD_REQUEST, "KB_INVALID_FILTER", e.getMessage());
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> handleUnreadableJson(HttpMessageNotReadableException e) {
         log.debug("请求体反序列化失败: {}", e.getMessage());
@@ -88,7 +94,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleKbAdmin(KbAdminException e) {
         // 知识库管理端错误码 → HTTP 状态（F11）：400 文件类/404 不存在/502 上游依赖失败/503 开关关
         HttpStatus status = switch (e.getCode()) {
-            case KbAdminException.KB_INVALID_FILE, KbAdminException.KB_FILE_TOO_LARGE ->
+            case KbAdminException.KB_INVALID_FILE, KbAdminException.KB_FILE_TOO_LARGE,
+                 KbAdminException.KB_INVALID_PROJECT, KbAdminException.KB_INVALID_TAGS ->
                     HttpStatus.BAD_REQUEST;
             case KbAdminException.KB_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case KbAdminException.KB_EMBEDDING_FAILED, KbAdminException.KB_STORE_FAILED ->
@@ -152,6 +159,10 @@ public class GlobalExceptionHandler {
         }
         if (e instanceof InvalidChatRequestException) {
             return new ApiError("BAD_REQUEST", e.getMessage(), now());
+        }
+        if (e instanceof InvalidKbFilterException) {
+            // 迭代10：知识库过滤参数非法在订阅前校验抛出，error 帧同码 KB_INVALID_FILTER
+            return new ApiError("KB_INVALID_FILTER", e.getMessage(), now());
         }
         if (e instanceof ModelCallException) {
             return new ApiError("MODEL_CALL_FAILED", e.getMessage(), now());

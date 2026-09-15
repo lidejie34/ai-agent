@@ -156,7 +156,7 @@ class OrchestrationServiceTest {
         assertThat(chunks.get(0)).hasSize(24);
         assertThat(chunks.get(2)).hasSize(2);
         assertThat(frames).isEmpty();
-        verify(executor, never()).execute(any(), any(), any(), anyLong());
+        verify(executor, never()).execute(any(), any(), any(), anyLong(), any());
         verify(planner, never()).replan(any(), anyLong());
         verify(planner, never()).synthStream(any());
     }
@@ -167,7 +167,7 @@ class OrchestrationServiceTest {
     void plan_happyPath_frameOrderAndContent() {
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "查日志"), task("t2", "写结论")));
-        when(executor.execute(any(), any(), any(), anyLong()))
+        when(executor.execute(any(), any(), any(), anyLong(), any()))
                 .thenReturn(ok("结果1"));
         when(planner.replan(any(), anyLong())).thenReturn(new ReplanDecision.Final());
         stubSynth("最终", "答案");
@@ -194,7 +194,7 @@ class OrchestrationServiceTest {
         assertThat(succeeded.taskId()).isEqualTo("t1");
         assertThat(succeeded.durationMs()).isEqualTo(42L);
         // replan 立刻 final：t2 不再执行
-        verify(executor, times(1)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(1)).execute(any(), any(), any(), anyLong(), any());
     }
 
     // ---- 3. 严格顺序：同一时刻仅一个 Executor 在途 ----
@@ -205,7 +205,7 @@ class OrchestrationServiceTest {
                 .thenReturn(plan(task("t1", "一"), task("t2", "二"), task("t3", "三")));
         AtomicInteger concurrent = new AtomicInteger();
         AtomicInteger maxConcurrent = new AtomicInteger();
-        when(executor.execute(any(), any(), any(), anyLong())).thenAnswer(inv -> {
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenAnswer(inv -> {
             int c = concurrent.incrementAndGet();
             maxConcurrent.accumulateAndGet(c, Math::max);
             Thread.sleep(80);
@@ -221,7 +221,7 @@ class OrchestrationServiceTest {
         collect(service.streamTurn(streamInputNoDegrade(), bridge));
 
         assertThat(maxConcurrent.get()).isEqualTo(1);
-        verify(executor, times(3)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(3)).execute(any(), any(), any(), anyLong(), any());
     }
 
     // ---- 5. replan next：新任务 started + plan 帧 round 递增携带最新台账 ----
@@ -229,7 +229,7 @@ class OrchestrationServiceTest {
     @Test
     void replanNext_publishesPlanFrameWithIncrementedRound() {
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "查日志")));
-        when(executor.execute(any(), any(), any(), anyLong()))
+        when(executor.execute(any(), any(), any(), anyLong(), any()))
                 .thenReturn(ok("结果1"))
                 .thenReturn(ok("结果2"));
         when(planner.replan(any(), anyLong()))
@@ -254,7 +254,7 @@ class OrchestrationServiceTest {
                 assertThat(f.round()).isEqualTo(2);
             }
         });
-        verify(executor, times(2)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(2)).execute(any(), any(), any(), anyLong(), any());
     }
 
     // ---- 6. skipped：台账 skipped + 审计 SKIPPED + 不执行 + 不计失败 ----
@@ -263,7 +263,7 @@ class OrchestrationServiceTest {
     void replanSkipped_markedLedger_audited_removedFromQueue() {
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "一"), task("t2", "二"), task("t3", "三")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong()))
                 .thenReturn(new ReplanDecision.Next(task("t4", "新任务"), List.of("t2", "t3")))
                 .thenReturn(new ReplanDecision.Final());
@@ -272,7 +272,7 @@ class OrchestrationServiceTest {
         collect(service.streamTurn(streamInputNoDegrade(), bridge));
 
         // 只执行 t1 与 t4；t2/t3 跳过
-        verify(executor, times(2)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(2)).execute(any(), any(), any(), anyLong(), any());
         PlanFrame latest = frames.stream()
                 .filter(f -> f instanceof PlanFrame).map(f -> (PlanFrame) f)
                 .reduce((a, b) -> b).orElseThrow();
@@ -289,7 +289,7 @@ class OrchestrationServiceTest {
     void taskFailure_failedFrameAndObservation_continuesToSynth() {
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "查日志"), task("t2", "备用")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(fail("DB 连接超时"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(fail("DB 连接超时"));
         when(planner.replan(any(), anyLong())).thenReturn(new ReplanDecision.Final());
         stubSynth("最终答案");
 
@@ -314,7 +314,7 @@ class OrchestrationServiceTest {
     void capRounds_noMorePlannerCalls_forceSynthWithReason() {
         props.setMaxRounds(2);
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "一")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong()))
                 .thenReturn(new ReplanDecision.Next(task("t2", "二"), List.of()));
         stubSynth("汇总");
@@ -322,7 +322,7 @@ class OrchestrationServiceTest {
         collect(service.streamTurn(streamInputNoDegrade(), bridge));
 
         verify(planner, times(1)).replan(any(), anyLong());
-        verify(executor, times(2)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(2)).execute(any(), any(), any(), anyLong(), any());
         ArgumentCaptor<PlannerContext> ctxCap = ArgumentCaptor.forClass(PlannerContext.class);
         verify(planner).synthStream(ctxCap.capture());
         assertThat(ctxCap.getValue().forceFinishReason()).isEqualTo(CapReasons.ROUNDS);
@@ -335,14 +335,14 @@ class OrchestrationServiceTest {
         props.setMaxTasks(2);
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "一"), task("t2", "二")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong()))
                 .thenReturn(new ReplanDecision.Next(task("t3", "三"), List.of()));
         stubSynth("汇总");
 
         collect(service.streamTurn(streamInputNoDegrade(), bridge));
 
-        verify(executor, times(2)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(2)).execute(any(), any(), any(), anyLong(), any());
         ArgumentCaptor<PlannerContext> ctxCap = ArgumentCaptor.forClass(PlannerContext.class);
         verify(planner).synthStream(ctxCap.capture());
         assertThat(ctxCap.getValue().forceFinishReason()).isEqualTo(CapReasons.TASKS);
@@ -355,7 +355,7 @@ class OrchestrationServiceTest {
         props.setMaxConsecutiveFailures(2);
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "一"), task("t2", "二"), task("t3", "三"), task("t4", "四")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenAnswer(inv -> {
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenAnswer(inv -> {
             TaskSpec spec = inv.getArgument(0);
             return switch (spec.taskId()) {
                 case "t1", "t3", "t4" -> fail("失败-" + spec.taskId());
@@ -371,7 +371,7 @@ class OrchestrationServiceTest {
         collect(service.streamTurn(streamInputNoDegrade(), bridge));
 
         // t1 失败(cf=1) → t2 成功(重置) → t3 失败(cf=1) → t4 失败(cf=2) 触顶
-        verify(executor, times(4)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(4)).execute(any(), any(), any(), anyLong(), any());
         verify(planner, times(3)).replan(any(), anyLong());
         ArgumentCaptor<PlannerContext> ctxCap = ArgumentCaptor.forClass(PlannerContext.class);
         verify(planner).synthStream(ctxCap.capture());
@@ -384,7 +384,7 @@ class OrchestrationServiceTest {
     void capBudget_remainingTooShortForSynth_errorSignal() {
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "一"), task("t2", "二")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenAnswer(inv -> {
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenAnswer(inv -> {
             Thread.sleep(200);
             return ok("ok");
         });
@@ -404,7 +404,7 @@ class OrchestrationServiceTest {
         // 连续失败上限放宽，让重复规划检测先生效
         props.setMaxConsecutiveFailures(4);
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "初始任务")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenAnswer(inv -> {
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenAnswer(inv -> {
             TaskSpec spec = inv.getArgument(0);
             return "t1".equals(spec.taskId()) ? ok("ok") : fail("又失败了");
         });
@@ -417,7 +417,7 @@ class OrchestrationServiceTest {
         collect(service.streamTurn(streamInputNoDegrade(), bridge));
 
         // t1 成功；t2 失败→replan 同标题(异常1)；t3 失败→replan 同标题(异常2)；t4 不执行
-        verify(executor, times(3)).execute(any(), any(), any(), anyLong());
+        verify(executor, times(3)).execute(any(), any(), any(), anyLong(), any());
         verify(planner, times(3)).replan(any(), anyLong());
         ArgumentCaptor<PlannerContext> ctxCap = ArgumentCaptor.forClass(PlannerContext.class);
         verify(planner).synthStream(ctxCap.capture());
@@ -429,7 +429,7 @@ class OrchestrationServiceTest {
     @Test
     void taskTimeout_timeoutObservationAndFailedFrame() {
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "慢任务")));
-        when(executor.execute(any(), any(), any(), anyLong()))
+        when(executor.execute(any(), any(), any(), anyLong(), any()))
                 .thenReturn(TaskOutcome.failure("子任务执行超时（已达单任务时限）", 5000, null, true));
         when(planner.replan(any(), anyLong())).thenReturn(new ReplanDecision.Final());
         stubSynth("汇总");
@@ -456,7 +456,7 @@ class OrchestrationServiceTest {
 
         assertThat(String.join("", chunks)).isEqualTo("降级片段");
         assertThat(frames).isEmpty();
-        verify(executor, never()).execute(any(), any(), any(), anyLong());
+        verify(executor, never()).execute(any(), any(), any(), anyLong(), any());
         verify(planner, never()).synthStream(any());
     }
 
@@ -467,7 +467,7 @@ class OrchestrationServiceTest {
         OrchSyncOutcome outcome = service.syncTurn(syncInput());
 
         assertThat(outcome.reply()).isEqualTo("降级回复");
-        verify(executor, never()).execute(any(), any(), any(), anyLong());
+        verify(executor, never()).execute(any(), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -486,7 +486,7 @@ class OrchestrationServiceTest {
     @Test
     void replanUnparseable_forcesSynth_notDegrade() {
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "一")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong())).thenReturn(new ReplanDecision.Unparseable());
         stubSynth("汇总");
 
@@ -503,7 +503,7 @@ class OrchestrationServiceTest {
     @Test
     void synthFailure_errorSignal() {
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "一")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong())).thenReturn(new ReplanDecision.Final());
         when(planner.synthStream(any()))
                 .thenReturn(Flux.error(new ModelCallException("synth-boom", new RuntimeException("up"))));
@@ -525,7 +525,7 @@ class OrchestrationServiceTest {
                 () -> { throw new AssertionError("不应降级"); });
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "一"), task("t2", "二")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong()))
                 .thenReturn(new ReplanDecision.Next(task("t3", "三"), List.of()))
                 .thenReturn(new ReplanDecision.Final());
@@ -534,7 +534,7 @@ class OrchestrationServiceTest {
         service.streamTurn(in, bridge).collectList().block(Duration.ofSeconds(15));
 
         ArgumentCaptor<ToolMount> mountCap = ArgumentCaptor.forClass(ToolMount.class);
-        verify(executor, times(2)).execute(any(), mountCap.capture(), any(), anyLong());
+        verify(executor, times(2)).execute(any(), mountCap.capture(), any(), anyLong(), any());
         assertThat(mountCap.getAllValues()).allSatisfy(m -> assertThat(m).isSameAs(mount));
     }
 
@@ -548,7 +548,7 @@ class OrchestrationServiceTest {
                 Duration.ofSeconds(110), true,
                 () -> Flux.just("降级"), () -> "降级");
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "一")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong())).thenReturn(new ReplanDecision.Final());
         stubSynth("汇总");
 
@@ -572,7 +572,7 @@ class OrchestrationServiceTest {
                         any(), any(), anyString(), anyLong(), any(), any());
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "一"), task("t2", "二")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong()))
                 .thenReturn(new ReplanDecision.Next(task("t3", "三"), List.of("t2")))
                 .thenReturn(new ReplanDecision.Final());
@@ -591,7 +591,7 @@ class OrchestrationServiceTest {
         CountDownLatch releaseExec = new CountDownLatch(1);
         when(planner.route(any(), anyLong()))
                 .thenReturn(plan(task("t1", "慢一"), task("t2", "慢二")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenAnswer(inv -> {
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenAnswer(inv -> {
             execEntered.countDown();
             releaseExec.await();
             return ok("ok");
@@ -613,7 +613,7 @@ class OrchestrationServiceTest {
     @Test
     void syncTurn_planHappy_aggregatesSynthReply() {
         when(planner.route(any(), anyLong())).thenReturn(plan(task("t1", "一")));
-        when(executor.execute(any(), any(), any(), anyLong())).thenReturn(ok("ok"));
+        when(executor.execute(any(), any(), any(), anyLong(), any())).thenReturn(ok("ok"));
         when(planner.replan(any(), anyLong())).thenReturn(new ReplanDecision.Final());
         stubSynth("最终", "答案");
 
@@ -634,6 +634,6 @@ class OrchestrationServiceTest {
         OrchSyncOutcome outcome = service.syncTurn(syncInput());
 
         assertThat(outcome.reply()).isEqualTo("直接回答");
-        verify(executor, never()).execute(any(), any(), any(), anyLong());
+        verify(executor, never()).execute(any(), any(), any(), anyLong(), any());
     }
 }

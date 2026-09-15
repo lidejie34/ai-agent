@@ -20,6 +20,10 @@ public class KbAdminException extends RuntimeException {
     public static final String KB_EMBEDDING_FAILED = "KB_EMBEDDING_FAILED";
     /** PG 读写失败（502；尽力落 FAILED）。 */
     public static final String KB_STORE_FAILED = "KB_STORE_FAILED";
+    /** 项目名非法（400，迭代10）。 */
+    public static final String KB_INVALID_PROJECT = "KB_INVALID_PROJECT";
+    /** 标签非法（400，迭代10）。 */
+    public static final String KB_INVALID_TAGS = "KB_INVALID_TAGS";
 
     private final String code;
 

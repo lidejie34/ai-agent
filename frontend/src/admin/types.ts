@@ -114,8 +114,24 @@ export interface KbDocument {
   chunkCount: number
   status: KbDocStatus | string
   error?: string | null
+  /** 迭代10：归属项目（fastjson2 null 省键 → 可选，展示「-」）。 */
+  project?: string
+  /** 迭代10：标签数组（缺键按 [] 处理）。 */
+  tags?: string[]
   createdAt: string
   updatedAt: string
+}
+
+/** 迭代10：PATCH /documents/{id} 全量替换 body——project=null 清除归属、tags=[] 清空标签。 */
+export interface KbDocumentMetaPatch {
+  project: string | null
+  tags: string[]
+}
+
+/** 迭代10：文档列表过滤（project 等值 + 单标签包含，组合 AND；全空 = 全量）。 */
+export interface KbDocFilter {
+  project?: string
+  tag?: string
 }
 
 export interface KbHealth {

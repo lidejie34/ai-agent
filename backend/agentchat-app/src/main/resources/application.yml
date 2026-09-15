@@ -291,6 +291,11 @@ app:
       allowed-ext: ${RAG_UPLOAD_ALLOWED_EXT:md,markdown,txt}
       # 单文档切片数硬顶（同步上传时延保护，超限 400 提示拆分）
       max-chunks: ${RAG_UPLOAD_MAX_CHUNKS:2000}
+    meta:
+      # 迭代10 维度元数据校验上限：标签数量/单标签长度/项目名长度（与 DDL VARCHAR(64) 对齐）
+      max-tags: ${RAG_META_MAX_TAGS:8}
+      max-tag-length: ${RAG_META_MAX_TAG_LENGTH:32}
+      max-project-length: ${RAG_META_MAX_PROJECT_LENGTH:64}
 
   # ---- 插入迭代 G：管理端鉴权（/api/admin/**）----
   # token 空白=未配置 → 管理端一律 503 ADMIN_NOT_CONFIGURED；仅 env / application-local.yml 注入，不入库。

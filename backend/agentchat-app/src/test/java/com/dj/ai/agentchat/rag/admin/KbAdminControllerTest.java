@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -73,7 +74,7 @@ class KbAdminControllerTest {
         @Test
         void upload_happy_201_viewFieldsAndServiceArgs() throws Exception {
             byte[] bytes = "# 差旅制度\n正文".getBytes(StandardCharsets.UTF_8);
-            when(service.upload(eq("差旅制度.md"), any())).thenReturn(doc(7L, "差旅制度.md", "READY", null));
+            when(service.upload(eq("差旅制度.md"), any(), isNull(), eq(List.of()))).thenReturn(doc(7L, "差旅制度.md", "READY", null));
 
             String body = mvc.perform(multipart("/api/admin/kb/documents")
                             .file(mdFile("差旅制度.md", bytes))
@@ -87,12 +88,12 @@ class KbAdminControllerTest {
                     .contains("\"updatedAt\":\"2026-09-10 12:31:05\"")
                     // 原文与哈希不外泄
                     .doesNotContain("原文").doesNotContain("\"content\"").doesNotContain("hash");
-            verify(service).upload(eq("差旅制度.md"), eq(bytes));
+            verify(service).upload(eq("差旅制度.md"), eq(bytes), isNull(), eq(List.of()));
         }
 
         @Test
         void upload_invalidFile_400_kbInvalidFile() throws Exception {
-            when(service.upload(any(), any()))
+            when(service.upload(any(), any(), any(), any()))
                     .thenThrow(new KbAdminException(KbAdminException.KB_INVALID_FILE, "仅支持 md/txt"));
 
             String body = mvc.perform(multipart("/api/admin/kb/documents")
@@ -105,7 +106,7 @@ class KbAdminControllerTest {
 
         @Test
         void upload_fileTooLarge_400() throws Exception {
-            when(service.upload(any(), any()))
+            when(service.upload(any(), any(), any(), any()))
                     .thenThrow(new KbAdminException(KbAdminException.KB_FILE_TOO_LARGE, "超限"));
             mvc.perform(multipart("/api/admin/kb/documents")
                             .file(mdFile("big.md", new byte[]{1}))
@@ -115,7 +116,7 @@ class KbAdminControllerTest {
 
         @Test
         void upload_embeddingFailed_502() throws Exception {
-            when(service.upload(any(), any()))
+            when(service.upload(any(), any(), any(), any()))
                     .thenThrow(new KbAdminException(KbAdminException.KB_EMBEDDING_FAILED, "Ollama down"));
             String body = mvc.perform(multipart("/api/admin/kb/documents")
                             .file(mdFile("a.md", new byte[]{1}))
@@ -127,7 +128,7 @@ class KbAdminControllerTest {
 
         @Test
         void upload_storeFailed_502() throws Exception {
-            when(service.upload(any(), any()))
+            when(service.upload(any(), any(), any(), any()))
                     .thenThrow(new KbAdminException(KbAdminException.KB_STORE_FAILED, "PG down"));
             mvc.perform(multipart("/api/admin/kb/documents")
                             .file(mdFile("b.md", new byte[]{1}))
@@ -155,7 +156,7 @@ class KbAdminControllerTest {
 
         @Test
         void list_200_viewsWithFormattedTime() throws Exception {
-            when(service.list()).thenReturn(List.of(
+            when(service.list(isNull(), isNull())).thenReturn(List.of(
                     doc(1L, "a.md", "READY", null),
                     doc(2L, "b.txt", "FAILED", "向量化失败: 连接超时")));
 
@@ -239,7 +240,7 @@ class KbAdminControllerTest {
         when(provider.getIfAvailable()).thenReturn(null);
         KbAdminController controller = new KbAdminController(provider);
 
-        assertThatThrownBy(controller::listDocuments)
+        assertThatThrownBy(() -> controller.listDocuments(null, null))
                 .isInstanceOf(KbAdminException.class)
                 .extracting(e -> ((KbAdminException) e).getCode())
                 .isEqualTo(KbAdminException.KB_DISABLED);

@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -171,7 +172,7 @@ class KbDocumentServiceTest {
         ArgumentCaptor<String> hashCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<List<String>> chunksCaptor = ArgumentCaptor.forClass(List.class);
         verify(repository).saveReady(eq("差旅制度.md"), eq(bytes.length), eq(content),
-                hashCaptor.capture(), chunksCaptor.capture(), anyList());
+                hashCaptor.capture(), chunksCaptor.capture(), anyList(), isNull(), eq(List.of()));
         assertThat(hashCaptor.getValue()).isEqualTo(expectedHash);
         assertThat(chunksCaptor.getValue()).hasSize(1);
     }
@@ -188,7 +189,7 @@ class KbDocumentServiceTest {
 
         // FAILED 行保留原文与 hash，片数 0
         verify(repository).saveFailed(eq("a.md"), anyInt(), eq("正文内容"),
-                anyString(), org.mockito.ArgumentMatchers.contains("Read timed out"));
+                anyString(), org.mockito.ArgumentMatchers.contains("Read timed out"), isNull(), eq(List.of()));
         verify(repository, never()).saveReady(anyString(), anyInt(), anyString(),
                 anyString(), anyList(), anyList());
     }
@@ -198,9 +199,9 @@ class KbDocumentServiceTest {
         when(embeddingService.embedBatch(anyList()))
                 .thenReturn(List.of(new float[]{1f}));
         when(repository.saveReady(anyString(), anyInt(), anyString(), anyString(),
-                anyList(), anyList()))
+                anyList(), anyList(), any(), anyList()))
                 .thenThrow(new DataAccessResourceFailureException("relation does not exist"));
-        when(repository.saveFailed(anyString(), anyInt(), anyString(), anyString(), anyString()))
+        when(repository.saveFailed(anyString(), anyInt(), anyString(), anyString(), anyString(), any(), anyList()))
                 .thenReturn(-1L);
 
         assertThatThrownBy(() -> service.upload("a.md", utf8("正文内容")))
@@ -208,7 +209,7 @@ class KbDocumentServiceTest {
                 .extracting(e -> ((KbAdminException) e).getCode())
                 .isEqualTo(KbAdminException.KB_STORE_FAILED);
         verify(repository).saveFailed(anyString(), anyInt(), anyString(), anyString(),
-                org.mockito.ArgumentMatchers.contains("relation does not exist"));
+                org.mockito.ArgumentMatchers.contains("relation does not exist"), isNull(), eq(List.of()));
     }
 
     @Test
@@ -279,7 +280,7 @@ class KbDocumentServiceTest {
         when(embeddingService.embedBatch(anyList()))
                 .thenReturn(List.of(new float[]{0.1f}));
         when(repository.saveReady(anyString(), anyInt(), anyString(), anyString(),
-                anyList(), anyList())).thenReturn(id);
+                anyList(), anyList(), any(), anyList())).thenReturn(id);
         when(repository.findById(id)).thenReturn(Optional.of(doc(id, "x.md", "READY")));
     }
 

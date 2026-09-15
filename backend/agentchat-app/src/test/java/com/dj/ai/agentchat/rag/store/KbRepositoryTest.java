@@ -66,7 +66,7 @@ class KbRepositoryTest {
                 docArgs.capture());
         Object[] args = docArgs.getValue();
         assertThat(args).containsExactly("差旅制度.md", 1234, "原文", "hashaa", 2,
-                RagDocument.STATUS_READY, null);
+                RagDocument.STATUS_READY, null, null, "[]");
 
         // 片段批量：2 行，列序 doc_id,index,file_name,content,vector literal
         @SuppressWarnings("rawtypes")

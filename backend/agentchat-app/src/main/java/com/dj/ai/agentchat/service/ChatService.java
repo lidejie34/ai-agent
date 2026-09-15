@@ -4,8 +4,10 @@ import com.dj.ai.agentchat.config.ChatEvidenceProperties;
 import com.dj.ai.agentchat.dto.ChatMessage;
 import com.dj.ai.agentchat.dto.ChatRequest;
 import com.dj.ai.agentchat.dto.ChatResponse;
+import com.dj.ai.agentchat.dto.KbFilter;
 import com.dj.ai.agentchat.exception.ChatNotConfiguredException;
 import com.dj.ai.agentchat.exception.InvalidChatRequestException;
+import com.dj.ai.agentchat.exception.InvalidKbFilterException;
 import com.dj.ai.agentchat.exception.MemoryPersistException;
 import com.dj.ai.agentchat.exception.MemoryUnavailableException;
 import com.dj.ai.agentchat.exception.ModelCallException;
@@ -15,7 +17,9 @@ import com.dj.ai.agentchat.orchestration.OrchEventBridge;
 import com.dj.ai.agentchat.orchestration.OrchInput;
 import com.dj.ai.agentchat.orchestration.OrchSyncOutcome;
 import com.dj.ai.agentchat.orchestration.OrchestrationService;
+import com.dj.ai.agentchat.rag.RagProperties;
 import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
+import com.dj.ai.agentchat.rag.support.KbMetaValidator;
 import com.dj.ai.agentchat.tool.support.ToolEvidenceCollector;
 import com.dj.ai.agentchat.tool.support.ToolMount;
 import com.dj.ai.agentchat.tool.support.ToolSupport;
@@ -107,7 +111,16 @@ public class ChatService {
      * 行为与上一迭代逐字节一致）。bean 经 {@code ChatEvidenceConfig} 无条件绑定恒在场。
      */
     private final ChatEvidenceProperties evidenceProperties;
+    /**
+     * RAG 配置（迭代10；app.rag.enabled=false 时 RagProperties 不绑定 → null →
+     * 知识库过滤校验走 RagProperties.Meta 默认上限，过滤参数本身因 advisor 缺席不生效）。
+     */
+    private final ObjectProvider<RagProperties> ragPropertiesProvider;
 
+    /**
+     * 迭代10 起 @Autowired 主构造（14 参）：末参 {@code ObjectProvider<RagProperties>}
+     * 条件解析（RAG 开关关闭 → null，校验用默认上限）。
+     */
     @Autowired
     public ChatService(ChatClient chatClient,
                        @Value("${spring.ai.openai.api-key:}") String apiKey,
@@ -121,7 +134,8 @@ public class ChatService {
                        ObjectProvider<ToolSupport> toolSupportProvider,
                        ObjectProvider<OrchestrationService> orchestrationProvider,
                        ObjectProvider<RagAdvisor> ragAdvisorProvider,
-                       ChatEvidenceProperties evidenceProperties) {
+                       ChatEvidenceProperties evidenceProperties,
+                       ObjectProvider<RagProperties> ragPropertiesProvider) {
         this.chatClient = chatClient;
         this.apiKey = apiKey;
         this.configuredModel = configuredModel;
@@ -135,6 +149,30 @@ public class ChatService {
         this.orchestrationProvider = orchestrationProvider;
         this.ragAdvisorProvider = ragAdvisorProvider;
         this.evidenceProperties = evidenceProperties;
+        this.ragPropertiesProvider = ragPropertiesProvider;
+    }
+
+    /**
+     * 迭代8 的既有 13 参构造（非 @Autowired 便捷构造）：委托 14 参主构造，
+     * ragProperties provider 传 null（校验走 Meta 默认上限）——迭代8/9 调用点零改动。
+     */
+    public ChatService(ChatClient chatClient,
+                       String apiKey,
+                       String configuredModel,
+                       int streamRetryMaxAttempts,
+                       Duration streamRetryMinBackoff,
+                       Duration streamRetryMaxBackoff,
+                       ObjectProvider<ConversationStore> conversationStoreProvider,
+                       int memoryMaxHistory,
+                       boolean memoryEnabled,
+                       ObjectProvider<ToolSupport> toolSupportProvider,
+                       ObjectProvider<OrchestrationService> orchestrationProvider,
+                       ObjectProvider<RagAdvisor> ragAdvisorProvider,
+                       ChatEvidenceProperties evidenceProperties) {
+        this(chatClient, apiKey, configuredModel, streamRetryMaxAttempts,
+                streamRetryMinBackoff, streamRetryMaxBackoff, conversationStoreProvider,
+                memoryMaxHistory, memoryEnabled, toolSupportProvider, orchestrationProvider,
+                ragAdvisorProvider, evidenceProperties, null);
     }
 
     /**
@@ -247,6 +285,8 @@ public class ChatService {
                 messages.size(), configuredModel, memory.sessionId(),
                 toolMount == null ? 0 : toolMount.callbacks().size(),
                 orchestrationEnabled(request));
+        // 迭代10：知识库检索维度过滤（validate 已校验，此处规整不可再抛）
+        KbFilter kbFilter = resolveKbFilter(request);
         String reply;
         String model;
         if (orchestrationEnabled(request)) {
@@ -254,8 +294,8 @@ public class ChatService {
             // 本线程以总预算+5s 安全网阻塞等待；路由失败经 degradeCall 回到迭代4 同步调用
             OrchestrationService orchestration = orchestrationProvider.getIfAvailable();
             OrchInput orchInput = buildOrchInput(request, memory, toolMount, false,
-                    () -> extractReply(callNormalSync(messages, toolMount)),
-                    null);
+                    () -> extractReply(callNormalSync(messages, toolMount, kbFilter)),
+                    null, kbFilter);
             OrchSyncOutcome outcome;
             try {
                 outcome = orchestration.syncTurn(orchInput);
@@ -269,7 +309,8 @@ public class ChatService {
             model = StringUtils.hasText(outcome.model()) ? outcome.model()
                     : (configuredModel == null ? "" : configuredModel);
         } else {
-            org.springframework.ai.chat.model.ChatResponse aiResponse = callNormalSync(messages, toolMount);
+            org.springframework.ai.chat.model.ChatResponse aiResponse =
+                    callNormalSync(messages, toolMount, kbFilter);
             reply = extractReply(aiResponse);
             model = resolveModel(aiResponse);
         }
@@ -313,6 +354,8 @@ public class ChatService {
         //    抛 "No AroundAdvisor available to execute"，故整个 ChatClient 流式装配必须包在
         //    Flux.defer 中：每次（重）订阅都重建 Advisor 链并重新调用模型（重试才真正生效）。
         StringBuilder aggregated = new StringBuilder();
+        // 迭代10：知识库检索维度过滤（validate 已校验，此处规整不可再抛）
+        KbFilter kbFilter = resolveKbFilter(request);
         boolean orchEnabled = orchestrationEnabled(request);
         OrchEventBridge orchBridge = null;
         Flux<String> source;
@@ -323,10 +366,10 @@ public class ChatService {
             orchBridge = new OrchEventBridge();
             OrchestrationService orchestration = orchestrationProvider.getIfAvailable();
             OrchInput orchInput = buildOrchInput(request, memory, toolMount, true,
-                    null, () -> buildNormalStreamFlux(messages, toolMount));
+                    null, () -> buildNormalStreamFlux(messages, toolMount, kbFilter), kbFilter);
             source = orchestration.streamTurn(orchInput, orchBridge);
         } else {
-            source = buildNormalStreamFlux(messages, toolMount);
+            source = buildNormalStreamFlux(messages, toolMount, kbFilter);
         }
         // 尾部管线与迭代4 同构（普通/编排/降级三流复用）：onErrorMap 归一 → 聚合 →
         // publishOn(boundedElastic) → doOnComplete 成对落库；落库异常吞掉绝不转 error
@@ -345,11 +388,12 @@ public class ChatService {
      * 迭代4 普通流式管线（Flux.defer 每次订阅新建 spec + 首片段前有限重试）；
      * 普通路径与编排降级路径共用，保证降级形态与开关关闭逐字节一致（AC-10）。
      */
-    private Flux<String> buildNormalStreamFlux(List<Message> messages, ToolMount toolMount) {
+    private Flux<String> buildNormalStreamFlux(List<Message> messages, ToolMount toolMount,
+                                               KbFilter kbFilter) {
         Flux<String> deferred = Flux.defer(() -> {
             ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
             applyTools(spec, toolMount);
-            applyRagAdvisor(spec, currentRagAdvisor());
+            applyRagAdvisor(spec, currentRagAdvisor(), kbFilter);
             return spec.stream().content();
         });
         return withFirstChunkRetry(deferred);
@@ -357,11 +401,12 @@ public class ChatService {
 
     /** 迭代4 普通同步模型调用（含异常归一）；普通路径与编排同步降级共用。 */
     private org.springframework.ai.chat.model.ChatResponse callNormalSync(List<Message> messages,
-                                                                          ToolMount toolMount) {
+                                                                          ToolMount toolMount,
+                                                                          KbFilter kbFilter) {
         try {
             ChatClient.ChatClientRequestSpec spec = chatClient.prompt().messages(messages);
             applyTools(spec, toolMount);
-            applyRagAdvisor(spec, currentRagAdvisor());
+            applyRagAdvisor(spec, currentRagAdvisor(), kbFilter);
             return spec.call().chatResponse();
         } catch (InvalidChatRequestException | ChatNotConfiguredException e) {
             throw e;
@@ -375,7 +420,8 @@ public class ChatService {
     private OrchInput buildOrchInput(ChatRequest request, ChatService.MemoryContext memory,
                                      ToolMount toolMount, boolean streaming,
                                      java.util.function.Supplier<String> degradeCall,
-                                     java.util.function.Supplier<Flux<String>> degradeStream) {
+                                     java.util.function.Supplier<Flux<String>> degradeStream,
+                                     KbFilter kbFilter) {
         String runId;
         if (toolMount != null && toolMount.toolContext() != null
                 && toolMount.toolContext().get("requestId") != null) {
@@ -387,7 +433,7 @@ public class ChatService {
         // history 仅传主会话历史前缀（不含本轮 user——Planner/Executor 各自以 userText 组装用户消息，
         // 避免重复；降级 supplier 仍用完整 messages）
         return new OrchInput(runId, request.message(), memory.promptPrefix(), memory.sessionId(),
-                toolMount, orchestration.totalBudget(streaming), streaming,
+                toolMount, orchestration.totalBudget(streaming), streaming, kbFilter,
                 degradeStream != null ? degradeStream : () -> {
                     throw new UnsupportedOperationException("流式降级在同步路径不可用");
                 },
@@ -426,9 +472,15 @@ public class ChatService {
      * RAG Advisor 缺席（app.rag.enabled=false）不调用 {@code .advisors()}——请求形态与迭代5
      * 逐字节一致；在场则请求级挂载（不入 defaultAdvisors，避免 Planner/Synth 也被检索增强）。
      */
-    private static void applyRagAdvisor(ChatClient.ChatClientRequestSpec spec, RagAdvisor advisor) {
+    private static void applyRagAdvisor(ChatClient.ChatClientRequestSpec spec, RagAdvisor advisor,
+                                        KbFilter kbFilter) {
         if (advisor != null) {
             spec.advisors(advisor);
+            // 迭代10：携带维度过滤时注入 advisor param（不过滤不注入——请求形态与迭代9 逐字节一致）
+            if (kbFilter != null && kbFilter.present()) {
+                spec.advisors(a -> a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project())
+                        .param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags()));
+            }
         }
     }
 
@@ -655,6 +707,54 @@ public class ChatService {
                 }
             }
         }
+        validateKbFilter(request);
+    }
+
+    /**
+     * 知识库检索过滤校验（迭代10）：kbProject/kbTags 任一在场即经 KbMetaValidator 白名单
+     * 校验（上限取 RagProperties.Meta，RAG 关闭时 bean 缺席用默认实例上限）；
+     * 非法 → InvalidKbFilterException（400 KB_INVALID_FILTER），不进模型调用。
+     */
+    private void validateKbFilter(ChatRequest request) {
+        if ((request.kbProject() == null || request.kbProject().isBlank())
+                && (request.kbTags() == null || request.kbTags().isEmpty())) {
+            return;
+        }
+        RagProperties.Meta meta = ragMeta();
+        try {
+            KbMetaValidator.normalizeProject(request.kbProject(), meta.getMaxProjectLength());
+            KbMetaValidator.normalizeTags(request.kbTags(), meta.getMaxTags(), meta.getMaxTagLength());
+        } catch (KbMetaValidator.KbMetaInvalidException e) {
+            throw new InvalidKbFilterException("知识库过滤参数非法：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 规整请求级知识库过滤（迭代10）：validateKbFilter 已保证不再抛；两维全空 → null
+     * （下游不注入 advisor param）。RAG 关闭（advisor 缺席）而请求带过滤 → warn 忽略，
+     * 与 sdd:true 遇开关关闭同纪律。
+     */
+    private KbFilter resolveKbFilter(ChatRequest request) {
+        if ((request.kbProject() == null || request.kbProject().isBlank())
+                && (request.kbTags() == null || request.kbTags().isEmpty())) {
+            return null;
+        }
+        RagProperties.Meta meta = ragMeta();
+        KbFilter filter = new KbFilter(
+                KbMetaValidator.normalizeProject(request.kbProject(), meta.getMaxProjectLength()),
+                KbMetaValidator.normalizeTags(request.kbTags(), meta.getMaxTags(), meta.getMaxTagLength()));
+        if (currentRagAdvisor() == null) {
+            log.warn("app.rag.enabled=false，请求知识库过滤参数已忽略（project={}, tags={}）",
+                    filter.project(), filter.tags());
+        }
+        return filter;
+    }
+
+    /** RagProperties.Meta 解析：bean 缺席（RAG 关闭/测试便捷构造）→ 默认实例上限。 */
+    private RagProperties.Meta ragMeta() {
+        RagProperties props = ragPropertiesProvider == null
+                ? null : ragPropertiesProvider.getIfAvailable();
+        return props == null ? new RagProperties.Meta() : props.getMeta();
     }
 
     private void ensureConfigured() {

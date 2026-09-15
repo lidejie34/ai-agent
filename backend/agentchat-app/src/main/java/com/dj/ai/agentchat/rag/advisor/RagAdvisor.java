@@ -31,6 +31,11 @@ public class RagAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
     public static final String NAME = "rag-retrieval-advisor";
     public static final int ORDER = 100;
 
+    /** advisor param 键（迭代10）：知识库检索项目过滤（String，可空）。 */
+    public static final String PARAM_KB_PROJECT = "kbProject";
+    /** advisor param 键（迭代10）：知识库检索标签过滤（List<String>，任一命中 OR）。 */
+    public static final String PARAM_KB_TAGS = "kbTags";
+
     static final String CITATION_RULE = """
             你可以参考上方 <retrieved-context> 中检索到的知识库资料回答问题。要求：
             1. 回答涉及知识库内容时，在回答末尾另起一行以「参考资料：」列出引用到的文件名
@@ -84,11 +89,16 @@ public class RagAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
         }
         try {
             float[] vector = embeddingService.embed(query);
-            List<RagChunkView> hits = repository.search(vector, topK).stream()
+            // 迭代10：advisor param 携带维度过滤（ChatService/ExecutorClient 注入；
+            // 两维全空走迭代6 无过滤 SQL 原文——逐字节回归）
+            String kbProject = paramProject(request);
+            List<String> kbTags = paramTags(request);
+            List<RagChunkView> hits = repository.search(vector, topK, kbProject, kbTags).stream()
                     .filter(h -> h.score() >= minScore)
                     .toList();
             if (hits.isEmpty()) {
-                log.debug("RAG 检索无高于阈值 {} 的命中，按原请求放行", minScore);
+                log.debug("RAG 检索无高于阈值 {} 的命中，按原请求放行（project={}, tags={}）",
+                        minScore, kbProject, kbTags);
                 return request;
             }
             String contextBlock = renderContext(hits);
@@ -96,7 +106,12 @@ public class RagAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
             String baseSystem = request.systemText();
             String system = (baseSystem == null || baseSystem.isBlank())
                     ? CITATION_RULE : baseSystem + "\n\n" + CITATION_RULE;
-            log.info("RAG 检索注入 {} 个片段（topK={}, 阈值={}）", hits.size(), topK, minScore);
+            if (kbProject == null && kbTags.isEmpty()) {
+                log.info("RAG 检索注入 {} 个片段（topK={}, 阈值={}）", hits.size(), topK, minScore);
+            } else {
+                log.info("RAG 检索注入 {} 个片段（topK={}, 阈值={}, project={}, tags={}）",
+                        hits.size(), topK, minScore, kbProject, kbTags);
+            }
             return AdvisedRequest.from(request)
                     .userText(augmentedUser)
                     .systemText(system)
@@ -105,6 +120,21 @@ public class RagAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
             log.warn("RAG 检索增强失败，降级为普通对话（不阻断）: {}", e.getMessage());
             return request;
         }
+    }
+
+    /** 读项目过滤 param（迭代10）：缺席/空白 → null；类型异常防御为 null（降级铁律）。 */
+    private static String paramProject(AdvisedRequest request) {
+        Object v = request.advisorParams() == null ? null : request.advisorParams().get(PARAM_KB_PROJECT);
+        return v instanceof String str && !str.isBlank() ? str : null;
+    }
+
+    /** 读标签过滤 param（迭代10）：缺席 → 空表；逐元素取 String 项（防御性过滤非字符串）。 */
+    private static List<String> paramTags(AdvisedRequest request) {
+        Object v = request.advisorParams() == null ? null : request.advisorParams().get(PARAM_KB_TAGS);
+        if (!(v instanceof List<?> list) || list.isEmpty()) {
+            return List.of();
+        }
+        return list.stream().filter(String.class::isInstance).map(String.class::cast).toList();
     }
 
     /**

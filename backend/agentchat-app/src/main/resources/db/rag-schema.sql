@@ -34,3 +34,11 @@ CREATE INDEX IF NOT EXISTS idx_rag_chunk_doc ON rag_chunk (doc_id);
 -- 余弦距离 HNSW 索引（检索走 <=> 操作符）
 CREATE INDEX IF NOT EXISTS idx_rag_chunk_emb ON rag_chunk
     USING hnsw (embedding vector_cosine_ops);
+
+-- 迭代10 知识库维度元数据：project 单值归属 + tags 多值标签（幂等迁移，
+-- 存量行 project=NULL / tags=[]，与迭代6 行为一致；检索过滤在 doc 维 prefilter）
+ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS project VARCHAR(64) NULL;
+ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]';
+
+CREATE INDEX IF NOT EXISTS idx_rag_doc_project ON rag_document (project);
+CREATE INDEX IF NOT EXISTS idx_rag_doc_tags ON rag_document USING gin (tags);

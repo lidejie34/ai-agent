@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -63,7 +64,7 @@ class RagAdvisorTest {
     @Test
     void augment_hitsAboveThreshold_injectsContextAndCitationRule() {
         when(embeddingService.embed("差旅报销标准")).thenReturn(new float[]{0.1f});
-        when(repository.search(any(), eq(4))).thenReturn(List.of(
+        when(repository.search(any(), eq(4), isNull(), eq(List.of()))).thenReturn(List.of(
                 new RagChunkView("差旅制度.md", "经济舱实报实销，住宿上限 500 元/晚", 0.74),
                 new RagChunkView("差旅制度.md", "出差需提前审批", 0.61),
                 new RagChunkView("无关.md", "今晚月色真美", 0.31)));
@@ -81,13 +82,13 @@ class RagAdvisorTest {
         assertThat(result.systemText())
                 .contains("参考资料")
                 .contains("不得编造文件名");
-        verify(repository).search(new float[]{0.1f}, 4);
+        verify(repository).search(new float[]{0.1f}, 4, null, List.of());
     }
 
     @Test
     void augment_thresholdFiltered_allBelow_returnsSameRequest() {
         when(embeddingService.embed(any())).thenReturn(new float[]{0f});
-        when(repository.search(any(), anyInt())).thenReturn(List.of(
+        when(repository.search(any(), anyInt(), isNull(), eq(List.of()))).thenReturn(List.of(
                 new RagChunkView("a.md", "弱相关", 0.44)));
 
         AdvisedRequest original = request("天气怎么样");
@@ -97,7 +98,7 @@ class RagAdvisorTest {
     @Test
     void augment_exactlyAtThreshold_passes() {
         when(embeddingService.embed(any())).thenReturn(new float[]{0f});
-        when(repository.search(any(), anyInt())).thenReturn(List.of(
+        when(repository.search(any(), anyInt(), isNull(), eq(List.of()))).thenReturn(List.of(
                 new RagChunkView("a.md", "卡线命中", 0.45)));
 
         AdvisedRequest result = advisor.augment(request("q"));
@@ -107,7 +108,7 @@ class RagAdvisorTest {
     @Test
     void augment_existingSystemText_ruleAppendedAfterIt() {
         when(embeddingService.embed(any())).thenReturn(new float[]{0f});
-        when(repository.search(any(), anyInt())).thenReturn(List.of(
+        when(repository.search(any(), anyInt(), isNull(), eq(List.of()))).thenReturn(List.of(
                 new RagChunkView("a.md", "片段", 0.9)));
 
         AdvisedRequest result = advisor.augment(requestWithSystem("q", "你是编排执行器"));
@@ -142,7 +143,7 @@ class RagAdvisorTest {
     @Test
     void augment_searchFails_degradesToSameRequest() {
         when(embeddingService.embed(any())).thenReturn(new float[]{0f});
-        when(repository.search(any(), anyInt()))
+        when(repository.search(any(), anyInt(), isNull(), eq(List.of())))
                 .thenThrow(new RuntimeException("relation rag_chunk does not exist"));
         AdvisedRequest original = request("问题");
         assertThat(advisor.augment(original)).isSameAs(original);
@@ -151,7 +152,7 @@ class RagAdvisorTest {
     @Test
     void aroundCall_passesAugmentedRequestToChain_andReturnsChainResponse() {
         when(embeddingService.embed(any())).thenReturn(new float[]{0f});
-        when(repository.search(any(), anyInt())).thenReturn(List.of(
+        when(repository.search(any(), anyInt(), isNull(), eq(List.of()))).thenReturn(List.of(
                 new RagChunkView("制度.md", "正文", 0.88)));
         CallAroundAdvisorChain chain = mock(CallAroundAdvisorChain.class);
         AdvisedResponse chainResponse = mock(AdvisedResponse.class);
@@ -167,7 +168,7 @@ class RagAdvisorTest {
     @Test
     void aroundStream_passesAugmentedRequestToChain_andReturnsChainFlux() {
         when(embeddingService.embed(any())).thenReturn(new float[]{0f});
-        when(repository.search(any(), anyInt())).thenReturn(List.of(
+        when(repository.search(any(), anyInt(), isNull(), eq(List.of()))).thenReturn(List.of(
                 new RagChunkView("制度.md", "正文", 0.88)));
         StreamAroundAdvisorChain chain = mock(StreamAroundAdvisorChain.class);
         AdvisedResponse item = mock(AdvisedResponse.class);

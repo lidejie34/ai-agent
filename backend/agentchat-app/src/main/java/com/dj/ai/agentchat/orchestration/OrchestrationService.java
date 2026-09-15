@@ -260,7 +260,8 @@ public class OrchestrationService {
                 ledger.put(task.taskId(), new TaskView(task.taskId(), task.title(), TaskView.RUNNING));
 
                 TaskOutcome outcome = executorClient.execute(
-                        task, in.toolMount(), executorCtx(), executorTimeoutNanos());
+                        task, in.toolMount(), executorCtx(), executorTimeoutNanos(),
+                        in.kbFilter());
                 tasksAccounted++;
                 observations.add(ObservationText.executed(task, outcome));
                 if (outcome.ok()) {

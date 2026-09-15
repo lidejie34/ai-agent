@@ -42,6 +42,9 @@ public class RagProperties {
     /** 上传约束。 */
     private Upload upload = new Upload();
 
+    /** 维度元数据约束（迭代10：project/tags 校验上限）。 */
+    private Meta meta = new Meta();
+
     @Data
     public static class Datasource {
         /** pgvector JDBC URL，指向 docker db-postgres-1 映射端口与 ai_vector 库。 */
@@ -89,5 +92,15 @@ public class RagProperties {
          * 超限 400 提示拆分文档。
          */
         private int maxChunks = 2000;
+    }
+
+    @Data
+    public static class Meta {
+        /** 单文档标签数量上限。 */
+        private int maxTags = 8;
+        /** 单标签最大字符数。 */
+        private int maxTagLength = 32;
+        /** 项目名最大字符数（与 DDL VARCHAR(64) 对齐）。 */
+        private int maxProjectLength = 64;
     }
 }

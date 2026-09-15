@@ -8,6 +8,7 @@ import com.dj.ai.agentchat.rag.embed.RagEmbeddingService;
 import com.dj.ai.agentchat.rag.schema.RagSchemaInitializer;
 import com.dj.ai.agentchat.rag.store.KbRepository;
 import com.dj.ai.agentchat.rag.store.RagDocument;
+import com.dj.ai.agentchat.rag.support.KbMetaValidator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 
@@ -24,6 +25,8 @@ import java.util.Locale;
 
 import static com.dj.ai.agentchat.rag.admin.KbAdminException.KB_EMBEDDING_FAILED;
 import static com.dj.ai.agentchat.rag.admin.KbAdminException.KB_INVALID_FILE;
+import static com.dj.ai.agentchat.rag.admin.KbAdminException.KB_INVALID_PROJECT;
+import static com.dj.ai.agentchat.rag.admin.KbAdminException.KB_INVALID_TAGS;
 import static com.dj.ai.agentchat.rag.admin.KbAdminException.KB_NOT_FOUND;
 import static com.dj.ai.agentchat.rag.admin.KbAdminException.KB_STORE_FAILED;
 
@@ -53,9 +56,20 @@ public class KbDocumentService {
         this.schemaInitializer = schemaInitializer;
     }
 
-    /** 上传并同步完成切片+向量化；成功返回 READY 文档视图（不含原文）。 */
+    /** 上传并同步完成切片+向量化；成功返回 READY 文档视图（不含原文）。迭代6 签名（无维度元数据）。 */
     public RagDocument upload(String originalFileName, byte[] bytes) {
+        return upload(originalFileName, bytes, null, List.of());
+    }
+
+    /**
+     * 上传打标（迭代10 规范签名）：维度元数据先于解码/向量化校验（fail-fast 不浪费 embedding）；
+     * 同名覆盖以新上传的 project/tags 为准。
+     */
+    public RagDocument upload(String originalFileName, byte[] bytes,
+                              String project, List<String> tags) {
         schemaInitializer.ensureSchema();
+        String normalizedProject = normalizeProjectMeta(project);
+        List<String> normalizedTags = normalizeTagsMeta(tags);
         String fileName = sanitizeFileName(originalFileName);
         validateExtension(fileName);
         validateSize(bytes);
@@ -74,17 +88,21 @@ public class KbDocumentService {
         }
         String hash = sha1Hex(bytes);
 
-        List<float[]> vectors = embedOrFail(fileName, bytes.length, content, hash, chunks);
+        List<float[]> vectors = embedOrFail(fileName, bytes.length, content, hash, chunks,
+                normalizedProject, normalizedTags);
         try {
-            long id = repository.saveReady(fileName, bytes.length, content, hash, chunks, vectors);
-            log.info("RAG 文档入库成功: {}（{} 片）", fileName, chunks.size());
+            long id = repository.saveReady(fileName, bytes.length, content, hash, chunks, vectors,
+                    normalizedProject, normalizedTags);
+            log.info("RAG 文档入库成功: {}（{} 片，project={}，tags={}）",
+                    fileName, chunks.size(), normalizedProject, normalizedTags);
             return repository.findById(id)
                     .orElseThrow(() -> new KbAdminException(KB_STORE_FAILED,
                             "文档插入后回读失败: " + fileName))
                     .withoutContent();
         } catch (DataAccessException e) {
             log.error("RAG 文档落库失败: {}", fileName, e);
-            saveFailedRow(fileName, bytes.length, content, hash, e.getMessage());
+            saveFailedRow(fileName, bytes.length, content, hash, e.getMessage(),
+                    normalizedProject, normalizedTags);
             throw new KbAdminException(KB_STORE_FAILED, "知识库写入失败: " + e.getMessage());
         }
     }
@@ -93,6 +111,41 @@ public class KbDocumentService {
     public List<RagDocument> list() {
         schemaInitializer.ensureSchema();
         return repository.listDocuments();
+    }
+
+    /**
+     * 文档列表过滤变体（迭代10）：project 等值 + 单标签包含，组合 AND；全空 = 全量。
+     * 过滤值经同一 Validator 规整（非法 → 400，与写侧同口径）。
+     */
+    public List<RagDocument> list(String project, String tag) {
+        schemaInitializer.ensureSchema();
+        String normalizedProject = normalizeProjectMeta(project);
+        List<String> tagList = normalizeTagsMeta(tag == null ? List.of() : List.of(tag));
+        String normalizedTag = tagList.isEmpty() ? null : tagList.get(0);
+        if (normalizedProject == null && normalizedTag == null) {
+            return repository.listDocuments();
+        }
+        return repository.listDocuments(normalizedProject, normalizedTag);
+    }
+
+    /**
+     * 全量替换维度元数据（迭代10 PATCH）：project 可 null=清除归属、tags 空数组=清空标签；
+     * 文档不存在 → KB_NOT_FOUND；返回最新视图。
+     */
+    public RagDocument updateMeta(long id, String project, List<String> tags) {
+        schemaInitializer.ensureSchema();
+        String normalizedProject = normalizeProjectMeta(project);
+        List<String> normalizedTags = normalizeTagsMeta(tags);
+        try {
+            int rows = repository.updateMeta(id, normalizedProject, normalizedTags);
+            if (rows == 0) {
+                throw new KbAdminException(KB_NOT_FOUND, "文档不存在: id=" + id);
+            }
+            log.info("RAG 文档元数据更新: id={}（project={}，tags={}）", id, normalizedProject, normalizedTags);
+        } catch (DataAccessException e) {
+            throw new KbAdminException(KB_STORE_FAILED, "元数据更新失败: " + e.getMessage());
+        }
+        return requireExists(id).withoutContent();
     }
 
     /** 删除文档（FK 级联片段）；不存在 → KB_NOT_FOUND。 */
@@ -137,22 +190,43 @@ public class KbDocumentService {
     }
 
     private List<float[]> embedOrFail(String fileName, int sizeBytes, String content,
-                                      String hash, List<String> chunks) {
+                                      String hash, List<String> chunks,
+                                      String project, List<String> tags) {
         try {
             return embeddingService.embedBatch(chunks);
         } catch (RagEmbeddingException e) {
-            saveFailedRow(fileName, sizeBytes, content, hash, e.getMessage());
+            saveFailedRow(fileName, sizeBytes, content, hash, e.getMessage(), project, tags);
             throw new KbAdminException(KB_EMBEDDING_FAILED, "向量化失败: " + e.getMessage());
         }
     }
 
-    /** best-effort 失败落库：再失败只 warn（不能掩盖原始异常）。 */
+    /** best-effort 失败落库：再失败只 warn（不能掩盖原始异常）；FAILED 行保留维度元数据。 */
     private void saveFailedRow(String fileName, int sizeBytes, String content,
-                               String hash, String error) {
+                               String hash, String error, String project, List<String> tags) {
         try {
-            repository.saveFailed(fileName, sizeBytes, content, hash, error);
+            repository.saveFailed(fileName, sizeBytes, content, hash, error, project, tags);
         } catch (DataAccessException ex) {
             log.warn("RAG FAILED 行落库也失败: {} - {}", fileName, ex.getMessage());
+        }
+    }
+
+    /** 项目名校验（迭代10）：非法 → KB_INVALID_PROJECT；合法/空白 → 规整值（可 null）。 */
+    private String normalizeProjectMeta(String project) {
+        try {
+            return KbMetaValidator.normalizeProject(project,
+                    properties.getMeta().getMaxProjectLength());
+        } catch (KbMetaValidator.KbMetaInvalidException e) {
+            throw new KbAdminException(KB_INVALID_PROJECT, e.getMessage());
+        }
+    }
+
+    /** 标签集合校验（迭代10）：非法 → KB_INVALID_TAGS；合法 → 规整列表（可空表）。 */
+    private List<String> normalizeTagsMeta(List<String> tags) {
+        try {
+            return KbMetaValidator.normalizeTags(tags,
+                    properties.getMeta().getMaxTags(), properties.getMeta().getMaxTagLength());
+        } catch (KbMetaValidator.KbMetaInvalidException e) {
+            throw new KbAdminException(KB_INVALID_TAGS, e.getMessage());
         }
     }
 

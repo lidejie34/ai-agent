@@ -1,6 +1,8 @@
 import { adminFetch, adminUpload } from './adminClient'
 import type {
+  KbDocFilter,
   KbDocument,
+  KbDocumentMetaPatch,
   KbHealth,
   McpServersResponse,
   PageResult,
@@ -50,14 +52,35 @@ export const verifyAdminToken = () => listTools()
 
 export const getKbHealth = () => adminFetch<KbHealth>('/api/admin/kb/health')
 
-export const listKbDocuments = () => adminFetch<KbDocument[]>('/api/admin/kb/documents')
+/** 文档列表（迭代10：可选 project 等值 + tag 单标签包含过滤；全空 = 全量）。 */
+export function listKbDocuments(filter?: KbDocFilter) {
+  const params = new URLSearchParams()
+  if (filter?.project?.trim()) params.set('project', filter.project.trim())
+  if (filter?.tag?.trim()) params.set('tag', filter.tag.trim())
+  const qs = params.toString()
+  return adminFetch<KbDocument[]>(`/api/admin/kb/documents${qs ? `?${qs}` : ''}`)
+}
 
-/** 上传 .md/.markdown/.txt（UTF-8）：multipart 字段名 file；201 READY。 */
-export function uploadKbDocument(file: File) {
+/**
+ * 上传 .md/.markdown/.txt（UTF-8）：multipart 字段名 file；201 READY。
+ * 迭代10：可选维度打标——project 非空白才附字段；tags 逗号拼接
+ * （元素白名单禁逗号，后端按逗号切分还原；规整/校验在服务端）。
+ */
+export function uploadKbDocument(file: File, meta?: { project?: string; tags?: string[] }) {
   const form = new FormData()
   form.append('file', file)
+  if (meta?.project?.trim()) form.append('project', meta.project.trim())
+  const tags = (meta?.tags ?? []).map((t) => t.trim()).filter(Boolean)
+  if (tags.length > 0) form.append('tags', tags.join(','))
   return adminUpload<KbDocument>('/api/admin/kb/documents', form)
 }
+
+/** 迭代10：全量替换文档维度元数据（project=null 清除、tags=[] 清空）；404 → KB_NOT_FOUND。 */
+export const patchKbDocumentMeta = (id: number, body: KbDocumentMetaPatch) =>
+  adminFetch<KbDocument>(`/api/admin/kb/documents/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
 
 export const deleteKbDocument = (id: number) =>
   adminFetch<void>(`/api/admin/kb/documents/${id}`, { method: 'DELETE' })

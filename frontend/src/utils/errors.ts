@@ -53,6 +53,11 @@ export function adminErrorText(e: { code: string; message?: string }): string {
         : '文件无效：仅支持 .md/.markdown/.txt（UTF-8）'
     case 'KB_FILE_TOO_LARGE':
       return '文件过大，超过 10MB 上限，请拆分后上传'
+    case 'KB_INVALID_PROJECT':
+      // 迭代10：400 校验类透传后端 message（含具体非法值与规则说明）
+      return e.message && e.message.trim() ? e.message : '项目名非法：仅支持中文/字母/数字/中划线/下划线'
+    case 'KB_INVALID_TAGS':
+      return e.message && e.message.trim() ? e.message : '标签非法：仅支持中文/字母/数字/中划线/下划线，单个 ≤ 32 字符，最多 8 个'
     case 'KB_NOT_FOUND':
       return '文档不存在或已被删除'
     case 'KB_EMBEDDING_FAILED':

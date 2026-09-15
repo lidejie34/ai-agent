@@ -11,6 +11,7 @@ import com.dj.ai.agentchat.orchestration.planner.PlannerContext;
 import com.dj.ai.agentchat.orchestration.planner.PlannerProtocol;
 import com.dj.ai.agentchat.orchestration.planner.SddPrompts;
 import com.dj.ai.agentchat.orchestration.planner.TaskSpec;
+import com.dj.ai.agentchat.dto.KbFilter;
 import com.dj.ai.agentchat.orchestration.support.ModelInvoker;
 import com.dj.ai.agentchat.orchestration.support.TaskTimeoutException;
 import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
@@ -116,6 +117,16 @@ public class ExecutorClient {
      */
     public TaskOutcome execute(TaskSpec task, @Nullable ToolMount mount,
                                PlannerContext ctx, long timeoutNanos) {
+        return execute(task, mount, ctx, timeoutNanos, null);
+    }
+
+    /**
+     * 迭代10 规范签名（5 参）：末参知识库检索维度过滤（可空）——非空且 advisor 在场时
+     * 注入 RagAdvisor advisor param；null 与 4 参逐字节一致（既有调用点零改动）。
+     */
+    public TaskOutcome execute(TaskSpec task, @Nullable ToolMount mount,
+                               PlannerContext ctx, long timeoutNanos,
+                               @Nullable KbFilter kbFilter) {
         long start = System.nanoTime();
         String userText = SddPrompts.executorUserText(ctx.userText(), task.title(), task.goal());
         try {
@@ -134,6 +145,12 @@ public class ExecutorClient {
                         ? null : ragAdvisorProvider.getIfAvailable();
                 if (ragAdvisor != null) {
                     spec.advisors(ragAdvisor);
+                    // 迭代10：请求级知识库过滤（OrchInput 透传）；无过滤不注入 param——
+                    // 请求形态与迭代9 逐字节一致
+                    if (kbFilter != null && kbFilter.present()) {
+                        spec.advisors(a -> a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project())
+                                .param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags()));
+                    }
                 }
                 PlannerClient.applyRoleOptions(spec, props.getExecutor());
                 // 迭代9：可观测性开启时标注调用点 caller=executor（关闭态不注入，请求形态不变）
