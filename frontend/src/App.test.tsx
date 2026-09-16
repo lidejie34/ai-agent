@@ -671,6 +671,27 @@ describe('App 集成（AC-17~29）', () => {
     })
   })
 
+  it('范围工具条（界面美化）：KB 或工具任一可用即渲染 chat-scope-bar 包裹，均不可用则缺席', async () => {
+    // 两者皆可用 → 包裹条渲染且内含两个选择器
+    const { fetchFn } = setupApp()
+    withToolsRoutes(fetchFn)
+    withKbRoutes(fetchFn)
+    const { unmount } = render(<App />)
+    const bar = await screen.findByTestId('chat-scope-bar')
+    expect(bar).toBeInTheDocument()
+    expect(screen.getByTestId('kb-filter-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-scope-bar')).toBeInTheDocument()
+    unmount()
+
+    // 均不可用（404）→ 包裹条缺席
+    setupApp()
+    render(<App />)
+    await waitFor(() => expect(screen.queryByTestId('sidebar-skeleton')).toBeNull())
+    expect(screen.queryByTestId('chat-scope-bar')).toBeNull()
+    expect(screen.queryByTestId('kb-filter-bar')).toBeNull()
+    expect(screen.queryByTestId('tool-scope-bar')).toBeNull()
+  })
+
   it('会话切换回填（迭代12 回归）：toolNames/mcpServers 皆 [] → 推导开关关闭', async () => {
     const { fetchFn } = setupApp({ initialSessions: [sessionSummary()] })
     withToolsRoutes(fetchFn, {

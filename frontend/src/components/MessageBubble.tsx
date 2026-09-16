@@ -35,6 +35,9 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
             )}
             {message.status === 'streaming' && (
               <span className="streaming-indicator" data-testid="streaming-indicator" aria-label="正在生成">
+                {/* 界面美化：三点波浪（错峰 delay 见 index.css） */}
+                <span className="streaming-dot" />
+                <span className="streaming-dot" />
                 <span className="streaming-dot" />
                 生成中…
               </span>

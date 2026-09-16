@@ -47,9 +47,12 @@ describe('MessageBubble', () => {
     expect(bubble.querySelector('strong')).toHaveTextContent('加粗')
   })
 
-  it('流式中：显示生成中指示', () => {
+  it('流式中：显示生成中指示（三点波浪）', () => {
     render(<MessageBubble message={msg({ content: '半截内容', status: 'streaming' })} />)
-    expect(screen.getByTestId('streaming-indicator')).toBeInTheDocument()
+    const indicator = screen.getByTestId('streaming-indicator')
+    expect(indicator).toBeInTheDocument()
+    // 界面美化：三点波浪动画（错峰 delay）
+    expect(indicator.querySelectorAll('.streaming-dot')).toHaveLength(3)
   })
 
   it('用户主动停止：片段保留并标注「已停止」', () => {

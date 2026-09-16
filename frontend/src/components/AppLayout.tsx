@@ -20,7 +20,7 @@ export default function AppLayout({ sidebar, headerExtra, children }: AppLayoutP
   return (
     <Layout className="app-layout" data-testid="app-layout">
       <Sider width={280} theme="light" className="app-sider" data-testid="app-sider">
-        <div className="app-logo">AI 对话</div>
+        <div className="app-logo">✨ AI 对话</div>
         {sidebar}
       </Sider>
       <Layout className="app-body">

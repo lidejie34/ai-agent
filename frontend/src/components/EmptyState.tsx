@@ -8,7 +8,7 @@ export const EXAMPLE_PROMPTS = [
 export default function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
   return (
     <div className="empty-state" data-testid="empty-state">
-      <h2 className="empty-title">你好，我是 AI 对话助手</h2>
+      <h2 className="empty-title">👋 你好，我是 AI 对话助手</h2>
       <p className="empty-subtitle">输入问题开始对话，或试试下面的示例：</p>
       <div className="example-list">
         {EXAMPLE_PROMPTS.map((prompt, i) => (

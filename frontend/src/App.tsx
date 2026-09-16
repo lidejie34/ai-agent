@@ -242,23 +242,28 @@ export default function App() {
         )}
       </div>
       <InlineError error={chat.lastError} onClose={chat.dismissError} />
-      {kbDims.available && (
-        <KbFilterBar
-          projects={kbDims.projects}
-          tags={kbDims.tags}
-          value={kbFilter}
-          onChange={handleKbFilterChange}
-          disabled={chat.isStreaming}
-        />
-      )}
-      {toolOpts.available && (
-        <ToolScopeBar
-          dbTools={toolOpts.dbTools}
-          mcpServers={toolOpts.mcpServers}
-          value={toolScope}
-          onChange={handleToolScopeChange}
-          disabled={chat.isStreaming}
-        />
+      {/* 界面美化：KB/工具筛选条收纳为一条圆角「范围工具条」（任一可用即渲染） */}
+      {(kbDims.available || toolOpts.available) && (
+        <div className="chat-scope-bar" data-testid="chat-scope-bar">
+          {kbDims.available && (
+            <KbFilterBar
+              projects={kbDims.projects}
+              tags={kbDims.tags}
+              value={kbFilter}
+              onChange={handleKbFilterChange}
+              disabled={chat.isStreaming}
+            />
+          )}
+          {toolOpts.available && (
+            <ToolScopeBar
+              dbTools={toolOpts.dbTools}
+              mcpServers={toolOpts.mcpServers}
+              value={toolScope}
+              onChange={handleToolScopeChange}
+              disabled={chat.isStreaming}
+            />
+          )}
+        </div>
       )}
       <ChatInput
         value={draft}
