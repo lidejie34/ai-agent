@@ -123,8 +123,8 @@ app:
       password: postgres
       driver-class-name: org.postgresql.Driver
   chat:
-    # SSE 流超时时间（毫秒）
-    sse-timeout-ms: 120000
+    # SSE 流超时时间（毫秒）；SSE 修复 D1：默认 120s→600s，长生成（工具多轮+长文）不再撞线截断
+    sse-timeout-ms: ${APP_CHAT_SSE_TIMEOUT_MS:600000}
 
     # ---- 迭代3：会话记忆（ChatMemory + MySQL/MyBatis-Plus）----
     memory:
@@ -241,7 +241,7 @@ app:
     max-tasks: ${APP_SDD_MAX_TASKS:8}
     # 连续失败硬顶（成功/跳过重置）
     max-consecutive-failures: ${APP_SDD_MAX_CONSECUTIVE_FAILURES:2}
-    # 总墙钟预算：必须短于容器超时（SSE sse-timeout-ms=120s / 同步 read-timeout=60s）
+    # 总墙钟预算：必须短于容器超时（SSE sse-timeout-ms=600s / 同步 read-timeout=60s）
     total-budget-sse: ${APP_SDD_TOTAL_BUDGET_SSE:110s}
     total-budget-sync: ${APP_SDD_TOTAL_BUDGET_SYNC:55s}
     # 单子任务超时；空白=继承模型 HTTP 读超时（60s），受总预算剩余时间兜底

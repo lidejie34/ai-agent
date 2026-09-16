@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
@@ -143,6 +144,16 @@ public class GlobalExceptionHandler {
                 "请求方法不支持: " + e.getMethod());
     }
 
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public ResponseEntity<Void> handleAsyncRequestTimeout(AsyncRequestTimeoutException e) {
+        // SSE 修复（D3）：SseEmitter 超时后容器把该异常重新分发进异常处理链。
+        // 终态帧已由 onTimeout 的 error 事件交付（D2），此处仅 debug 日志并返回 null——
+        // Spring 视为「已处理、不写任何字节」：不再 ERROR「未处理异常」，
+        // 也不再把 INTERNAL_ERROR JSON 追加进已完成的 SSE 字节流。
+        log.debug("异步请求超时（SSE 流已由 error 帧终止）: {}", e.getMessage());
+        return null;
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception e) {
         log.error("未处理异常", e);
@@ -157,6 +168,10 @@ public class GlobalExceptionHandler {
      * SSE error 事件的错误映射：与同步接口的状态码/错误码语义保持一致。
      */
     public static ApiError toApiError(Throwable e) {
+        if (e instanceof SseStreamTimeoutException) {
+            // SSE 修复（D2）：软截止超时——error 帧码 SSE_TIMEOUT（截断可见，正文保留）
+            return new ApiError("SSE_TIMEOUT", e.getMessage(), now());
+        }
         if (e instanceof ChatNotConfiguredException) {
             return new ApiError("ARK_NOT_CONFIGURED", e.getMessage(), now());
         }

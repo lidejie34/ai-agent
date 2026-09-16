@@ -6,6 +6,7 @@ import com.dj.ai.agentchat.dto.ChatResponse;
 import com.dj.ai.agentchat.dto.SessionEvent;
 import com.dj.ai.agentchat.dto.StreamChunk;
 import com.dj.ai.agentchat.exception.GlobalExceptionHandler;
+import com.dj.ai.agentchat.exception.SseStreamTimeoutException;
 import com.dj.ai.agentchat.observability.SlowRequestTracker;
 import com.dj.ai.agentchat.orchestration.OrchEventBridge;
 import com.dj.ai.agentchat.orchestration.frame.PlanFrame;
@@ -51,6 +52,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 @RequestMapping("/api/chat")
 public class ChatController {
 
+    /** SSE 修复（D2）：软截止相对容器硬超时的提前量（毫秒）。 */
+    private static final long SSE_TIMEOUT_GRACE_MS = 5000;
+
     private final ChatService chatService;
     private final long sseTimeoutMs;
     private final boolean heartbeatEnabled;
@@ -71,7 +75,7 @@ public class ChatController {
      */
     @Autowired
     public ChatController(ChatService chatService,
-                          @Value("${app.chat.sse-timeout-ms:120000}") long sseTimeoutMs,
+                          @Value("${app.chat.sse-timeout-ms:600000}") long sseTimeoutMs,
                           @Value("${app.chat.heartbeat.enabled:true}") boolean heartbeatEnabled,
                           @Value("${app.chat.heartbeat.interval:15s}") Duration heartbeatInterval,
                           @Value("${app.chat.heartbeat.text:keepalive}") String heartbeatText,
@@ -210,7 +214,9 @@ public class ChatController {
             });
         }
 
-        Flux<String> flux = result.chunks();
+        // SSE 修复（D2）：软截止——容器硬超时（sseTimeoutMs）前主动终止流，
+        // 让终态 error 帧（SSE_TIMEOUT）经下方错误消费器发出（容器 onTimeout 回调内已无法发帧）
+        Flux<String> flux = withSoftDeadline(result.chunks());
         Disposable subscription = flux.subscribe(
                 chunk -> {
                     int seq = chunkCount.incrementAndGet();
@@ -222,9 +228,13 @@ public class ChatController {
                     resetHeartbeat(heartbeat);
                 },
                 error -> {
-                    log.warn("SSE流式对话异常: 已推送片段数={}, 耗时={}ms, 原因={}",
+                    // 软截止超时与普通错误共用发送路径；慢请求终态区分 timeout/error（可观测口径不变）
+                    boolean timeout = error instanceof SseStreamTimeoutException;
+                    log.warn("SSE流式对话{}: 已推送片段数={}, 耗时={}ms, 原因={}",
+                            timeout ? "软截止超时" : "异常",
                             chunkCount.get(), System.currentTimeMillis() - start, error.getMessage());
-                    recordSlowOnce(slowRecorded, traceId, "/api/chat/stream", start, "error");
+                    recordSlowOnce(slowRecorded, traceId, "/api/chat/stream", start,
+                            timeout ? "timeout" : "error");
                     detachAll(toolBridge, orchBridge);
                     sendErrorAndComplete(emitter, error);
                     cancelHeartbeat(heartbeat);
@@ -239,7 +249,10 @@ public class ChatController {
                     cancelHeartbeat(heartbeat);
                 });
 
-        // 超时 / 断连：取消订阅并停止心跳（五条退出路径全覆盖，均摘除工具桥 sink）
+        // 超时 / 断连：取消订阅并停止心跳（五条退出路径全覆盖，均摘除工具桥 sink）。
+        // SSE 修复（D2）：Spring 6.2 容器超时回调先置 complete 标志再执行本委托——
+        // 回调内已无法再发帧；终态 error 帧由 Reactor 软截止（withSoftDeadline）提前触发，
+        // 本回调仅作兜底清理（正常软截止路径下不会走到）。
         emitter.onTimeout(() -> {
             log.warn("SSE流式对话超时: 已推送片段数={}, 耗时={}ms",
                     chunkCount.get(), System.currentTimeMillis() - start);
@@ -277,6 +290,31 @@ public class ChatController {
         if (orchBridge != null) {
             orchBridge.detach();
         }
+    }
+
+    /**
+     * SSE 修复（D2）：给文本流加软截止——容器硬超时（sseTimeoutMs）前 {@value #SSE_TIMEOUT_GRACE_MS}ms
+     * 主动结束流并补 {@link SseStreamTimeoutException}，由 flux 错误消费器发
+     * {@code event:error}（SSE_TIMEOUT）再 complete。
+     *
+     * <p>为何不用容器 onTimeout 发帧：Spring 6.2 容器超时回调入口
+     * {@code ResponseBodyEmitter$DefaultCallback.run()} 先 CAS 置 complete 标志再执行委托，
+     * 回调内 send 必抛 IllegalStateException（字节码核实）。因此终态帧必须在容器超时之前
+     * 从流侧触发；容器 onTimeout 退化为纯兜底清理。
+     *
+     * <p>实现：{@code take(deadline)} 到点取消上游并向下游发 onComplete；自然完成时
+     * doOnComplete 已置位，concat 空流（正常 done 帧）；截止触发时 concat 错误流
+     * （走 error 帧路径）。截止取 {@code max(sseTimeoutMs - 5s, sseTimeoutMs / 2)}，
+     * 极小超时配置下仍留有正 deadline。
+     */
+    private Flux<String> withSoftDeadline(Flux<String> flux) {
+        long deadlineMs = Math.max(sseTimeoutMs - SSE_TIMEOUT_GRACE_MS, sseTimeoutMs / 2);
+        AtomicBoolean naturalDone = new AtomicBoolean();
+        return flux.doOnComplete(() -> naturalDone.set(true))
+                .take(Duration.ofMillis(deadlineMs))
+                .concatWith(Flux.defer(() -> naturalDone.get()
+                        ? Flux.empty()
+                        : Flux.error(new SseStreamTimeoutException("模型响应超时，已生成内容可能不完整"))));
     }
 
     // ---- 慢请求记录（迭代9 FR-4） ----
