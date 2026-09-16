@@ -577,8 +577,11 @@ public class ChatService {
                                         KbFilter kbFilter) {
         if (advisor != null) {
             spec.advisors(advisor);
+            // 三下拉「都不加载」：显式 kbProjects:[] → 挂载 disabled 标记，RagAdvisor 直接放行
+            if (kbFilter != null && kbFilter.disabled()) {
+                spec.advisors(a -> a.param(RagAdvisor.PARAM_KB_DISABLED, Boolean.TRUE));
+            } else if (kbFilter != null && kbFilter.present()) {
             // 迭代10：携带维度过滤时注入 advisor param（不过滤不注入——请求形态与迭代9 逐字节一致）
-            if (kbFilter != null && kbFilter.present()) {
                 spec.advisors(a -> {
                     // 迭代11：projects 空集合缺省注入（与迭代10 null project 缺省同纪律，
                     // 请求形态保持最小差异；Assert.notNull 不拒空 List）
@@ -824,6 +827,11 @@ public class ChatService {
      * 不进模型调用。
      */
     private void validateKbFilter(ChatRequest request) {
+        // 三下拉「都不加载」：显式空 kbProjects = 本轮不加载知识库——
+        // kbTags 宽松忽略（在场也不校验、不 400，NFR-3）
+        if (request.kbProjects() != null && request.kbProjects().isEmpty()) {
+            return;
+        }
         if ((request.kbProjects() == null || request.kbProjects().isEmpty())
                 && (request.kbTags() == null || request.kbTags().isEmpty())) {
             return;
@@ -843,6 +851,11 @@ public class ChatService {
      * → warn 忽略，与 sdd:true 遇开关关闭同纪律。
      */
     private KbFilter resolveKbFilter(ChatRequest request) {
+        // 三下拉「都不加载」：显式空 kbProjects = 本轮完全不加载知识库（tags 宽松忽略）；
+        // RAG 缺席时无需 warn——反正不会检索，行为一致
+        if (request.kbProjects() != null && request.kbProjects().isEmpty()) {
+            return KbFilter.none();
+        }
         if ((request.kbProjects() == null || request.kbProjects().isEmpty())
                 && (request.kbTags() == null || request.kbTags().isEmpty())) {
             return null;

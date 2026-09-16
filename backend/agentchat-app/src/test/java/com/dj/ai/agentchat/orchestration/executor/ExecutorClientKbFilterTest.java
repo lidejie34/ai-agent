@@ -148,6 +148,46 @@ class ExecutorClientKbFilterTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void kbFilterDisabled_injectsDisabledParamOnly() {
+        // 三下拉「都不加载」：编排 Executor 路径同样挂载 disabled 标记，projects/tags 不注入
+        TaskOutcome o = client.execute(task, null, ctx(), 0, KbFilter.none());
+
+        assertThat(o.ok()).isTrue();
+        verify(spec).advisors(advisor);
+        ArgumentCaptor<Consumer<ChatClient.AdvisorSpec>> captor =
+                ArgumentCaptor.forClass(Consumer.class);
+        verify(spec).advisors(captor.capture());
+        ChatClient.AdvisorSpec advisorSpec = mock(ChatClient.AdvisorSpec.class);
+        when(advisorSpec.param(anyString(), any())).thenReturn(advisorSpec);
+        captor.getValue().accept(advisorSpec);
+        verify(advisorSpec).param(RagAdvisor.PARAM_KB_DISABLED, Boolean.TRUE);
+        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_PROJECTS), any());
+        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_TAGS), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void kbFilterDisabledButAdvisorAbsent_silentlyIgnored() {
+        when(advisorProvider.getIfAvailable()).thenReturn(null);
+
+        TaskOutcome o = client.execute(task, null, ctx(), 0, KbFilter.none());
+
+        assertThat(o.ok()).isTrue();
+        verify(spec, never()).advisors(any(RagAdvisor.class));
+        verify(spec, never()).advisors(any(Consumer.class));
+    }
+
+    @Test
+    void kbFilter_legacyTwoArgCtor_notDisabled() {
+        // 两参兼容构造（迭代10/11 调用点零改动）：disabled=false
+        KbFilter filter = new KbFilter(List.of("订单域"), List.of());
+
+        assertThat(filter.disabled()).isFalse();
+        assertThat(filter.present()).isTrue();
+    }
+
+    @Test
     void orchInput_legacyCtor_delegatesNullKbFilter() {
         OrchInput in = new OrchInput("run-1", "你好", List.of(), "sid-1", null,
                 Duration.ofSeconds(10), false, () -> null, () -> "降级");

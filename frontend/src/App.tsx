@@ -15,6 +15,7 @@ import { useKbDimensions } from './hooks/useKbDimensions'
 import { useSessions } from './hooks/useSessions'
 import { useLocalDraft } from './hooks/useLocalDraft'
 import { readStoredSessionId, writeStoredSessionId } from './utils/storage'
+import { DB_TOOLS_NONE, KB_NONE, MCP_NONE } from './scopeNone'
 
 const STREAMING_BLOCK_MESSAGE = '生成中，请先停止'
 
@@ -39,13 +40,17 @@ export default function App() {
   sessionIdRef.current = chat.currentSessionId
   const scopeSaveTimerRef = useRef<number | undefined>(undefined)
 
-  /** 页面态 → PUT 请求体三态映射：空数组 KB 维度 → null（默认全部）；开关关 → 显式 []（全不挂）。 */
-  const toScopeBody = (kb: KbFilterValue, ts: ToolScopeValue): SessionScope => ({
-    kbProjects: kb.projects.length > 0 ? kb.projects : null,
-    kbTags: kb.tags.length > 0 ? kb.tags : null,
-    toolNames: !ts.enabled ? [] : (ts.toolNames ?? null),
-    mcpServers: !ts.enabled ? [] : (ts.mcpServers ?? null),
-  })
+  /** 页面态 → PUT 请求体三态映射：空数组 KB 维度 → null（默认全部）；开关关 → 显式 []（全不挂）；
+   *  「都不加载」哨兵 → 显式 []（KB 都不加载时 tags 归 null——选择器已禁用清空）。 */
+  const toScopeBody = (kb: KbFilterValue, ts: ToolScopeValue): SessionScope => {
+    const kbNone = kb.projects.includes(KB_NONE)
+    return {
+      kbProjects: kbNone ? [] : kb.projects.length > 0 ? kb.projects : null,
+      kbTags: kbNone ? null : kb.tags.length > 0 ? kb.tags : null,
+      toolNames: !ts.enabled ? [] : ts.toolNames?.includes(DB_TOOLS_NONE) ? [] : (ts.toolNames ?? null),
+      mcpServers: !ts.enabled ? [] : ts.mcpServers?.includes(MCP_NONE) ? [] : (ts.mcpServers ?? null),
+    }
+  }
 
   const persistScopeDebounced = (kb: KbFilterValue, ts: ToolScopeValue) => {
     window.clearTimeout(scopeSaveTimerRef.current)
@@ -63,17 +68,24 @@ export default function App() {
     try {
       const scope = await getSessionScope(sid)
       window.clearTimeout(scopeSaveTimerRef.current) // 丢弃切换前未发出的保存
-      setKbFilter({ projects: scope.kbProjects ?? [], tags: scope.kbTags ?? [] })
-      const allOff =
-        Array.isArray(scope.toolNames) && scope.toolNames.length === 0 &&
-        Array.isArray(scope.mcpServers) && scope.mcpServers.length === 0
+      // KB 三态恢复：[]=都不加载（显哨兵、标签清空）；null=默认全部（空选择器）
+      const kbNone = Array.isArray(scope.kbProjects) && scope.kbProjects.length === 0
+      setKbFilter(
+        kbNone
+          ? { projects: [KB_NONE], tags: [] }
+          : { projects: scope.kbProjects ?? [], tags: scope.kbTags ?? [] },
+      )
+      // 工具三态恢复：单侧 [] → 该侧显哨兵；两侧皆 [] → 仍推导 enabled=false（迭代12 兼容）
+      const dbNone = Array.isArray(scope.toolNames) && scope.toolNames.length === 0
+      const mcpNone = Array.isArray(scope.mcpServers) && scope.mcpServers.length === 0
+      const allOff = dbNone && mcpNone
       setToolScope(
         allOff
           ? { enabled: false, toolNames: [], mcpServers: [] }
           : {
               enabled: true,
-              toolNames: scope.toolNames ?? undefined,
-              mcpServers: scope.mcpServers ?? undefined,
+              toolNames: dbNone ? [DB_TOOLS_NONE] : (scope.toolNames ?? undefined),
+              mcpServers: mcpNone ? [MCP_NONE] : (scope.mcpServers ?? undefined),
             },
       )
     } catch {

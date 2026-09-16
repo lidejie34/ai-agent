@@ -145,9 +145,12 @@ public class ExecutorClient {
                         ? null : ragAdvisorProvider.getIfAvailable();
                 if (ragAdvisor != null) {
                     spec.advisors(ragAdvisor);
+                    // 三下拉「都不加载」：显式 kbProjects:[] → 挂载 disabled 标记直接放行
+                    if (kbFilter != null && kbFilter.disabled()) {
+                        spec.advisors(a -> a.param(RagAdvisor.PARAM_KB_DISABLED, Boolean.TRUE));
+                    } else if (kbFilter != null && kbFilter.present()) {
                     // 迭代10：请求级知识库过滤（OrchInput 透传）；无过滤不注入 param——
                     // 请求形态与迭代9 逐字节一致
-                    if (kbFilter != null && kbFilter.present()) {
                         spec.advisors(a -> {
                             // 迭代11：projects 空集合缺省注入（同 ChatService 纪律）
                             if (!kbFilter.projects().isEmpty()) {

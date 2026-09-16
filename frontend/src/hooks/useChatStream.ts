@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { streamChat } from '../api/sse'
+import { DB_TOOLS_NONE, KB_NONE, MCP_NONE } from '../scopeNone'
 import type { ApiError, ChatMessage, ChatRole, ChatStatus, NetworkError, PlanTaskInfo, PlanTaskStatus, SessionMessageView, ToolCallInfo } from '../types'
 
 /** 规划任务状态秩：只升级不降级（防御帧乱序，迭代5）。pending<running<终态三态同级。 */
@@ -159,25 +160,30 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         body.sessionId = '' // 新建
       }
       // 无状态：省略 sessionId 键
-      // 知识库维度过滤（迭代10；迭代11 项目多选）：全空省略两键，请求形态与未打标一致
-      if (kbFilter?.projects && kbFilter.projects.length > 0) {
+      // 知识库维度过滤（迭代10；迭代11 项目多选）：全空省略两键，请求形态与未打标一致；
+      // 「都不加载」哨兵 → 显式 []（本轮完全不加载知识库），tags 省略（后端宽松忽略）
+      const kbNone = kbFilter?.projects?.includes(KB_NONE) ?? false
+      if (kbNone) {
+        body.kbProjects = []
+      } else if (kbFilter?.projects && kbFilter.projects.length > 0) {
         body.kbProjects = kbFilter.projects
       }
-      if (kbFilter?.tags && kbFilter.tags.length > 0) {
+      if (!kbNone && kbFilter?.tags && kbFilter.tags.length > 0) {
         body.kbTags = kbFilter.tags
       }
       // 对话级工具范围（迭代12）：toolScope 未传 → 两键全省略（与未开启选择器逐字节一致）；
-      // 开关关 → 显式 []（本轮不挂任何工具）；开关开 → 有选才带键（undefined=默认全部）
+      // 开关关 → 显式 []（本轮不挂任何工具）；开关开 → 有选才带键（undefined=默认全部）；
+      // 「都不加载」哨兵 → 该侧显式 []（该侧全不挂，另一侧不受影响）
       if (toolScope) {
         if (!toolScope.enabled) {
           body.toolNames = []
           body.mcpServers = []
         } else {
           if (toolScope.toolNames) {
-            body.toolNames = toolScope.toolNames
+            body.toolNames = toolScope.toolNames.includes(DB_TOOLS_NONE) ? [] : toolScope.toolNames
           }
           if (toolScope.mcpServers) {
-            body.mcpServers = toolScope.mcpServers
+            body.mcpServers = toolScope.mcpServers.includes(MCP_NONE) ? [] : toolScope.mcpServers
           }
         }
       }

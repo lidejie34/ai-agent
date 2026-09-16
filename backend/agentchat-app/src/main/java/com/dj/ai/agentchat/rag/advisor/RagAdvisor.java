@@ -35,6 +35,8 @@ public class RagAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
     public static final String PARAM_KB_PROJECTS = "kbProjects";
     /** advisor param 键（迭代10）：知识库检索标签过滤（List<String>，任一命中 OR）。 */
     public static final String PARAM_KB_TAGS = "kbTags";
+    /** advisor param 键（三下拉「都不加载」）：Boolean.TRUE = 显式 kbProjects:[]，本轮完全跳过检索。 */
+    public static final String PARAM_KB_DISABLED = "kbDisabled";
 
     static final String CITATION_RULE = """
             你可以参考上方 <retrieved-context> 中检索到的知识库资料回答问题。要求：
@@ -83,6 +85,12 @@ public class RagAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
      * 任何异常或无命中返回原请求（包级可见以便单测）。
      */
     AdvisedRequest augment(AdvisedRequest request) {
+        // 三下拉「都不加载」：显式 kbProjects:[] → 直接放行原始请求
+        // （不 embedding、不 repository.search、不注入检索片段/引用纪律）
+        if (kbDisabled(request)) {
+            log.debug("知识库显式不加载（kbProjects:[]），本轮跳过检索增强");
+            return request;
+        }
         String query = request.userText();
         if (query == null || query.isBlank()) {
             return request;
@@ -120,6 +128,12 @@ public class RagAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
             log.warn("RAG 检索增强失败，降级为普通对话（不阻断）: {}", e.getMessage());
             return request;
         }
+    }
+
+    /** 读显式禁用 param（「都不加载」）：仅 Boolean.TRUE 判定禁用，类型异常防御为未禁用。 */
+    private static boolean kbDisabled(AdvisedRequest request) {
+        Object v = request.advisorParams() == null ? null : request.advisorParams().get(PARAM_KB_DISABLED);
+        return Boolean.TRUE.equals(v);
     }
 
     /** 读项目过滤 param（迭代11 多选）：缺席 → 空表；逐元素取非空白 String 项（防御性过滤）。 */

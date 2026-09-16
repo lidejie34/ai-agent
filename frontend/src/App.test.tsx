@@ -464,4 +464,233 @@ describe('App 集成（AC-17~29）', () => {
       expect(body).not.toHaveProperty('mcpServers')
     })
   })
+
+  // ---- 三下拉「都不加载」互斥哨兵 ----
+
+  /** 在默认路由上叠加 KB dimensions 路由。 */
+  function withKbRoutes(fetchFn: ReturnType<typeof vi.fn>) {
+    const original = fetchFn.getMockImplementation()!
+    fetchFn.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/kb/dimensions')) {
+        return json({ projects: ['订单域', '物流域'], tags: ['售后', '退货'] })
+      }
+      return original(url, init)
+    })
+  }
+
+  /** 打开某多选下拉连点若干选项（同一下拉内连选，最后一次 Escape 关闭——
+   *  避免 Escape 后立刻重开同一 select 命中 jsdom 中不收尾的离场动画，
+   *  该动画期间 antd slide leave-active 置 pointer-events:none）。
+   *  同名选项可能同时存在于离场中的旧下拉，须轮询取非 leave 态下拉里的节点。 */
+  async function pickOption(testId: string, ...labels: string[]) {
+    const sel = screen.getByTestId(testId)
+    fireEvent.mouseDown(sel.querySelector('.ant-select-selector') as HTMLElement)
+    for (const label of labels) {
+      let opt!: HTMLElement
+      await waitFor(() => {
+        const candidates = screen.getAllByText(label, {
+          selector: '.ant-select-item-option-content',
+        }) as HTMLElement[]
+        const clickable = candidates.filter((el) => {
+          const dd = el.closest('.ant-select-dropdown')
+          return dd && !dd.className.includes('leave')
+        })
+        expect(clickable.length).toBeGreaterThan(0)
+        opt = clickable[clickable.length - 1]
+      })
+      fireEvent.click(opt)
+    }
+    await userEvent.keyboard('{Escape}')
+  }
+
+  it('KB「都不加载」：选哨兵互斥清空项目和标签、标签下拉禁用；发送 kbProjects=[] 无 kbTags', async () => {
+    const { fetchFn } = setupApp()
+    withKbRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId('kb-filter-bar')
+
+    // 先选项目+标签，再选「都不加载」→ 互斥清空
+    await pickOption('chat-kb-project', '订单域')
+    await pickOption('chat-kb-tags', '售后')
+    await pickOption('chat-kb-project', '都不加载')
+
+    const projectSel = screen.getByTestId('chat-kb-project')
+    expect(projectSel.textContent).toContain('都不加载')
+    expect(projectSel.textContent).not.toContain('订单域')
+    expect(screen.getByTestId('chat-kb-tags')).toHaveClass('ant-select-disabled')
+    expect(screen.getByTestId('chat-kb-tags').textContent).not.toContain('售后')
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '随便聊聊' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.kbProjects).toEqual([])
+      expect(body).not.toHaveProperty('kbTags')
+    })
+  })
+
+  it('KB 哨兵互斥摘除：哨兵在场再选项目 → 哨兵摘除，发送带子集', async () => {
+    const { fetchFn } = setupApp()
+    withKbRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId('kb-filter-bar')
+
+    await pickOption('chat-kb-project', '都不加载', '物流域')
+
+    const projectSel = screen.getByTestId('chat-kb-project')
+    expect(projectSel.textContent).toContain('物流域')
+    expect(projectSel.textContent).not.toContain('都不加载')
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '查承运' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.kbProjects).toEqual(['物流域'])
+    })
+  })
+
+  it('内置工具「都不加载」：发送 toolNames=[]、mcpServers 省略；两侧互不影响', async () => {
+    const { fetchFn } = setupApp()
+    withToolsRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId('tool-scope-bar')
+
+    await pickOption('chat-tool-names', '都不加载')
+    expect(screen.getByTestId('chat-tool-names').textContent).toContain('都不加载')
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '你好' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.toolNames).toEqual([])
+      expect(body).not.toHaveProperty('mcpServers')
+    })
+  })
+
+  it('MCP 服务「都不加载」：发送 mcpServers=[]、toolNames 省略', async () => {
+    const { fetchFn } = setupApp()
+    withToolsRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId('tool-scope-bar')
+
+    await pickOption('chat-mcp-servers', '都不加载')
+    expect(screen.getByTestId('chat-mcp-servers').textContent).toContain('都不加载')
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '你好' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.mcpServers).toEqual([])
+      expect(body).not.toHaveProperty('toolNames')
+    })
+  })
+
+  it('会话级持久化：选 KB/内置工具哨兵 → 防抖 PUT 显式 []', async () => {
+    const { fetchFn } = setupApp({ initialSessions: [sessionSummary()] })
+    withToolsRoutes(fetchFn)
+    withKbRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await screen.findByTestId('tool-scope-bar')
+
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await waitFor(() =>
+      expect(fetchFn.mock.calls.some(([u]) => String(u).includes('/scope'))).toBe(true),
+    )
+    await new Promise((r) => setTimeout(r, 50))
+
+    await pickOption('chat-kb-project', '都不加载')
+    await pickOption('chat-tool-names', '都不加载')
+
+    await waitFor(
+      () => {
+        const puts = fetchFn.mock.calls.filter(
+          ([u, i]) =>
+            String(u).includes(`/api/sessions/${SID}/scope`) &&
+            ((i as RequestInit | undefined)?.method ?? 'GET') === 'PUT',
+        )
+        expect(puts.length).toBeGreaterThan(0)
+        const body = JSON.parse(
+          String((puts[puts.length - 1][1] as RequestInit).body),
+        ) as Record<string, unknown>
+        expect(body).toEqual({
+          kbProjects: [],
+          kbTags: null,
+          toolNames: [],
+          mcpServers: null,
+        })
+      },
+      { timeout: 2000 },
+    )
+  })
+
+  it('会话切换回填：kbProjects=[] → 项目显「都不加载」；toolNames=[] 单侧 → 内置工具显「都不加载」且开关仍开', async () => {
+    const { fetchFn } = setupApp({ initialSessions: [sessionSummary()] })
+    withToolsRoutes(fetchFn, {
+      kbProjects: [],
+      kbTags: null,
+      toolNames: [],
+      mcpServers: ['easy-mysql'],
+    })
+    withKbRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await screen.findByTestId('tool-scope-bar')
+
+    // 回填可见：KB 项目与内置工具各显「都不加载」；MCP 显 easy-mysql；开关仍开（迭代12 单侧 [] 推导）
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-kb-project').textContent).toContain('都不加载'),
+    )
+    expect(screen.getByTestId('chat-kb-tags')).toHaveClass('ant-select-disabled')
+    expect(screen.getByTestId('chat-tool-names').textContent).toContain('都不加载')
+    expect(screen.getByTestId('chat-mcp-servers').textContent).toContain('easy-mysql')
+    expect(screen.getByTestId('chat-tool-enabled')).toBeChecked()
+
+    // 回填生效后发送：显式 [] 两侧 + MCP 子集
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '继续' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.kbProjects).toEqual([])
+      expect(body).not.toHaveProperty('kbTags')
+      expect(body.toolNames).toEqual([])
+      expect(body.mcpServers).toEqual(['easy-mysql'])
+    })
+  })
+
+  it('会话切换回填（迭代12 回归）：toolNames/mcpServers 皆 [] → 推导开关关闭', async () => {
+    const { fetchFn } = setupApp({ initialSessions: [sessionSummary()] })
+    withToolsRoutes(fetchFn, {
+      kbProjects: null,
+      kbTags: null,
+      toolNames: [],
+      mcpServers: [],
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await waitFor(() =>
+      expect(fetchFn.mock.calls.some(([u]) => String(u).includes('/scope'))).toBe(true),
+    )
+    await new Promise((r) => setTimeout(r, 50))
+
+    // 开关关闭 → 两个多选整体不渲染
+    expect(screen.getByTestId('chat-tool-enabled')).not.toBeChecked()
+    expect(screen.queryByTestId('chat-tool-names')).toBeNull()
+    expect(screen.queryByTestId('chat-mcp-servers')).toBeNull()
+  })
 })
