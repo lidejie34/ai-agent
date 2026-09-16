@@ -48,8 +48,9 @@ class ChatMemorySchemaInitializerTest {
 
         verify(dataSource).getConnection();
         verify(connection).createStatement();
-        // 两条 CREATE TABLE 经 mock Statement 执行（真实解析 classpath db/chat-memory-schema.sql）
-        verify(statement, times(2)).execute(org.mockito.ArgumentMatchers.contains("CREATE TABLE"));
+        // 三条 CREATE TABLE 经 mock Statement 执行（真实解析 classpath db/chat-memory-schema.sql；
+        // 迭代12 追加 chat_session_scope 会话级范围配置表）
+        verify(statement, times(3)).execute(org.mockito.ArgumentMatchers.contains("CREATE TABLE"));
         verify(statement).close();
     }
 

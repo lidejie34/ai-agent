@@ -2,6 +2,7 @@ package com.dj.ai.agentchat.memory;
 
 import com.dj.ai.agentchat.memory.po.ChatMessagePO;
 import com.dj.ai.agentchat.memory.po.ChatSessionPO;
+import com.dj.ai.agentchat.memory.po.ChatSessionScopePO;
 
 import java.util.Collection;
 import java.util.List;
@@ -48,4 +49,14 @@ public interface SessionManager {
      * 返回更新后的会话行（含最新 updated_at）。
      */
     ChatSessionPO rename(String sessionId, String title);
+
+    /**
+     * 查会话级范围配置（迭代12）：行缺席返回 {@code null}（= 从未配置 = 全默认）。
+     */
+    ChatSessionScopePO findScope(String sessionId);
+
+    /**
+     * 幂等 upsert 会话级范围配置（迭代12）：四列全量覆盖，三态语义由 service 层保证。
+     */
+    void upsertScope(ChatSessionScopePO scope);
 }

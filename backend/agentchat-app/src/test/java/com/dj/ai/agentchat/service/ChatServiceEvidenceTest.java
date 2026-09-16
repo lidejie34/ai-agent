@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -97,7 +98,8 @@ class ChatServiceEvidenceTest {
 
     private static ToolSupport supportReturning(ToolMount mount) {
         ToolSupport support = mock(ToolSupport.class);
-        when(support.mountTools(anyString())).thenReturn(mount);
+        // 迭代12：ChatService 统一走双参重载 mountTools(sessionId, selection)；any() 匹配 null selection
+        when(support.mountTools(anyString(), any())).thenReturn(mount);
         return support;
     }
 

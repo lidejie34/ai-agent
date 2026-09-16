@@ -72,7 +72,10 @@ class ChatServiceToolMountTest {
 
     private ToolSupport supportReturning(ToolMount mount) {
         ToolSupport support = mock(ToolSupport.class);
-        when(support.mountTools(org.mockito.ArgumentMatchers.any())).thenReturn(mount);
+        // 迭代12：ChatService 统一走双参重载 mountTools(sessionId, selection)；
+        // any()（无类型）匹配 null selection
+        when(support.mountTools(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(mount);
         return support;
     }
 
@@ -126,12 +129,13 @@ class ChatServiceToolMountTest {
         String sid = "550e8400-e29b-41d4-a716-446655440000";
         ToolSupport support = mock(ToolSupport.class);
         ToolMount mount = mount(sid);
-        when(support.mountTools(sid)).thenReturn(mount);
+        // 迭代12：双参重载；请求未带工具范围时 selection=null
+        when(support.mountTools(sid, null)).thenReturn(mount);
         ChatService service = serviceWithStoreAndTools(store, support);
 
         service.chatStream(new ChatRequest("你好", null, sid)).chunks().blockLast();
 
-        verify(support).mountTools(sid);
+        verify(support).mountTools(sid, null);
         ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
         verify(spec).toolContext(ctxCaptor.capture());
         assertThat(ctxCaptor.getValue().get("sessionId")).isEqualTo(sid);
@@ -151,7 +155,8 @@ class ChatServiceToolMountTest {
     @Test
     void stream_mountThrowing_degradesToNoTools() {
         ToolSupport support = mock(ToolSupport.class);
-        when(support.mountTools(org.mockito.ArgumentMatchers.any()))
+        when(support.mountTools(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
                 .thenThrow(new RuntimeException("注册中心炸了"));
         ChatService service = serviceWith(support);
 

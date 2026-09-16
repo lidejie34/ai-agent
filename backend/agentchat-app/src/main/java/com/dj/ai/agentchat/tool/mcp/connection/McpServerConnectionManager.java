@@ -135,6 +135,24 @@ public class McpServerConnectionManager implements ApplicationRunner {
     }
 
     /**
+     * 对话级 server 组过滤变体（迭代12 D4）：只返回选中 server 的 READY 回调。
+     * 源头按连接表 key 精确匹配（未知名/UNAVAILABLE 自然落空）；空集合返回空列表。
+     * 实时遍历连接表（不走扁平快照），与 {@link #markUnavailable} 摘除语义天然一致。
+     */
+    public List<ToolCallback> toolCallbacks(java.util.Set<String> serverNames) {
+        if (serverNames == null || serverNames.isEmpty()) {
+            return List.of();
+        }
+        List<ToolCallback> selected = new ArrayList<>();
+        for (McpServerConnection conn : connections.values()) {
+            if (conn.isReady() && serverNames.contains(conn.name())) {
+                selected.addAll(conn.callbacks());
+            }
+        }
+        return List.copyOf(selected);
+    }
+
+    /**
      * 当前连接视图（配置顺序；含 UNAVAILABLE）。供管理端只读视图。
      */
     public List<McpServerConnection> connections() {

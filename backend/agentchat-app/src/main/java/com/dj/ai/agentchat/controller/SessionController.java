@@ -3,6 +3,8 @@ package com.dj.ai.agentchat.controller;
 import com.dj.ai.agentchat.dto.session.RenameRequest;
 import com.dj.ai.agentchat.dto.session.SessionDeleteResult;
 import com.dj.ai.agentchat.dto.session.SessionMessageView;
+import com.dj.ai.agentchat.dto.session.SessionScopeUpdate;
+import com.dj.ai.agentchat.dto.session.SessionScopeView;
 import com.dj.ai.agentchat.dto.session.SessionSummary;
 import com.dj.ai.agentchat.service.SessionService;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +13,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -59,5 +62,18 @@ public class SessionController {
                                         @RequestBody(required = false) RenameRequest request) {
         String title = request == null ? null : request.title();
         return sessionService.renameSession(sessionId, title);
+    }
+
+    /** 读会话级范围配置（迭代12：知识库维度+工具/MCP 选择；行缺席=全默认视图）。 */
+    @GetMapping("/{sessionId}/scope")
+    public SessionScopeView getScope(@PathVariable String sessionId) {
+        return sessionService.getScope(sessionId);
+    }
+
+    /** 全量覆盖会话级范围配置（迭代12：选择器变化即 PUT 最新完整状态）。 */
+    @PutMapping(value = "/{sessionId}/scope", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public SessionScopeView putScope(@PathVariable String sessionId,
+                                     @RequestBody(required = false) SessionScopeUpdate request) {
+        return sessionService.updateScope(sessionId, request);
     }
 }

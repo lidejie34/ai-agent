@@ -134,15 +134,25 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
   }, [])
 
   const send = useCallback(
-    async (text: string, kbFilter?: { projects?: string[]; tags?: string[] }) => {
+    async (
+      text: string,
+      kbFilter?: { projects?: string[]; tags?: string[] },
+      toolScope?: { enabled: boolean; toolNames?: string[]; mcpServers?: string[] },
+    ) => {
       const trimmed = text.trim()
       if (!trimmed) return // 空白拦截
       if (controllerRef.current) return // 流式中双保险拦截
 
       setLastError(null)
       const sid = sessionRef.current
-      const body: { message: string; sessionId?: string; kbProjects?: string[]; kbTags?: string[] } =
-        { message: trimmed }
+      const body: {
+        message: string
+        sessionId?: string
+        kbProjects?: string[]
+        kbTags?: string[]
+        toolNames?: string[]
+        mcpServers?: string[]
+      } = { message: trimmed }
       if (sid) {
         body.sessionId = sid // 续接
       } else if (rememberRef.current) {
@@ -155,6 +165,21 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       }
       if (kbFilter?.tags && kbFilter.tags.length > 0) {
         body.kbTags = kbFilter.tags
+      }
+      // 对话级工具范围（迭代12）：toolScope 未传 → 两键全省略（与未开启选择器逐字节一致）；
+      // 开关关 → 显式 []（本轮不挂任何工具）；开关开 → 有选才带键（undefined=默认全部）
+      if (toolScope) {
+        if (!toolScope.enabled) {
+          body.toolNames = []
+          body.mcpServers = []
+        } else {
+          if (toolScope.toolNames) {
+            body.toolNames = toolScope.toolNames
+          }
+          if (toolScope.mcpServers) {
+            body.mcpServers = toolScope.mcpServers
+          }
+        }
       }
 
       const userMsg: ChatMessage = { id: uid('u'), role: 'user', content: trimmed, status: 'done' }

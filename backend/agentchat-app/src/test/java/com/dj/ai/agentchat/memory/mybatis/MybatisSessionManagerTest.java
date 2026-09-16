@@ -3,8 +3,10 @@ package com.dj.ai.agentchat.memory.mybatis;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.dj.ai.agentchat.memory.mapper.ChatMessageMapper;
 import com.dj.ai.agentchat.memory.mapper.ChatSessionMapper;
+import com.dj.ai.agentchat.memory.mapper.ChatSessionScopeMapper;
 import com.dj.ai.agentchat.memory.po.ChatMessagePO;
 import com.dj.ai.agentchat.memory.po.ChatSessionPO;
+import com.dj.ai.agentchat.memory.po.ChatSessionScopePO;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.BeforeEach;
@@ -128,6 +130,59 @@ class MybatisSessionManagerTest {
         Method method = MybatisSessionManager.class.getMethod("deleteCascade", String.class);
         assertThat(method.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
                 .isNotNull();
+    }
+
+    // ---------- 会话级范围配置（迭代12）：scope mapper 委派与级联 ----------
+
+    @Test
+    void findScope_delegatesToScopeMapper() {
+        ChatSessionScopeMapper scopeMapper = mock(ChatSessionScopeMapper.class);
+        MybatisSessionManager m = new MybatisSessionManager(
+                chatSessionMapper, chatMessageMapper, schemaInitializer, scopeMapper);
+        ChatSessionScopePO po = new ChatSessionScopePO();
+        when(scopeMapper.selectById(SID)).thenReturn(po);
+
+        assertThat(m.findScope(SID)).isSameAs(po);
+        verify(scopeMapper).selectById(SID);
+    }
+
+    @Test
+    void upsertScope_delegatesUpsert() {
+        ChatSessionScopeMapper scopeMapper = mock(ChatSessionScopeMapper.class);
+        MybatisSessionManager m = new MybatisSessionManager(
+                chatSessionMapper, chatMessageMapper, schemaInitializer, scopeMapper);
+        ChatSessionScopePO po = new ChatSessionScopePO();
+        po.setSessionId(SID);
+
+        m.upsertScope(po);
+
+        verify(scopeMapper).upsert(po);
+    }
+
+    /** 级联删除顺序：消息 → 范围配置 → 会话行（同事务）。 */
+    @Test
+    void deleteCascade_withScopeMapper_deletesScopeBeforeSession() {
+        ChatSessionScopeMapper scopeMapper = mock(ChatSessionScopeMapper.class);
+        MybatisSessionManager m = new MybatisSessionManager(
+                chatSessionMapper, chatMessageMapper, schemaInitializer, scopeMapper);
+
+        m.deleteCascade(SID);
+
+        InOrder inOrder = inOrder(chatMessageMapper, scopeMapper, chatSessionMapper);
+        inOrder.verify(chatMessageMapper).deleteBySessionId(SID);
+        inOrder.verify(scopeMapper).deleteBySessionId(SID);
+        inOrder.verify(chatSessionMapper).deleteById(SID);
+    }
+
+    /** 3 参便捷构造（scope mapper=null）：scope 操作安全 no-op，级联不受影响。 */
+    @Test
+    void scopeOps_nullScopeMapper_safeNoOp() {
+        assertThat(manager.findScope(SID)).isNull();
+        ChatSessionScopePO po = new ChatSessionScopePO();
+        po.setSessionId(SID);
+        manager.upsertScope(po); // 不抛异常即通过
+        manager.deleteCascade(SID);
+        verify(chatSessionMapper).deleteById(SID);
     }
 
     // ---------- rename：局部更新 title 并回读 ----------

@@ -237,6 +237,43 @@ class McpServerConnectionManagerTest {
 
     // ==================== 脚手架 ====================
 
+    // ==================== 对话级 server 组过滤（迭代12 D4） ====================
+
+    /** toolCallbacks(Set)：只返回选中且 READY server 的回调；未知名/空集合/null → 空。 */
+    @Test
+    void toolCallbacksWithSet_onlySelectedReadyServers() {
+        FakeGateway gA = new FakeGateway("fs").tools(tool("read_file"));
+        FakeGateway gB = new FakeGateway("ev").tools(tool("echo"));
+        FakeFactory factory = new FakeFactory(Map.of("fs", gA, "ev", gB));
+        McpServerConnectionManager manager = newManager(factory, new RecordingRedactor(),
+                new ToolProperties(), List.of(spec("fs", "/bin/fs"), spec("ev", "/bin/ev")));
+        manager.startup();
+
+        // 选中 fs → 恰好其回调集合（与连接内回调同一引用）
+        assertThat(manager.toolCallbacks(java.util.Set.of("fs")))
+                .containsExactlyElementsOf(manager.connections().get(0).callbacks());
+        // 双选 → 两个 server 各 1 个 stub 回调
+        assertThat(manager.toolCallbacks(java.util.Set.of("fs", "ev"))).hasSize(2);
+        // 未知名 / 空集合 / null → 空
+        assertThat(manager.toolCallbacks(java.util.Set.of("no_such"))).isEmpty();
+        assertThat(manager.toolCallbacks(java.util.Set.of())).isEmpty();
+        assertThat(manager.toolCallbacks(null)).isEmpty();
+    }
+
+    /** 选中的 server 处于 UNAVAILABLE → 不产出回调（与扁平快照摘除语义一致）。 */
+    @Test
+    void toolCallbacksWithSet_unavailableServerYieldsNothing() {
+        FakeGateway gA = new FakeGateway("ok").tools(tool("echo"));
+        FakeFactory factory = new FakeFactory(Map.of("ok", gA))
+                .connectError("bad", new McpConnectException("MCP server 握手失败: bad: 启动即退", null));
+        McpServerConnectionManager manager = newManager(factory, new RecordingRedactor(),
+                new ToolProperties(), List.of(spec("ok", "/bin/ok"), spec("bad", "/bin/bad")));
+        manager.startup();
+
+        assertThat(manager.toolCallbacks(java.util.Set.of("bad"))).isEmpty();
+        assertThat(manager.toolCallbacks(java.util.Set.of("ok", "bad"))).hasSize(1);
+    }
+
     private static McpServerConnectionManager newManager(FakeFactory factory, SecretRedactor redactor,
                                                         ToolProperties props,
                                                         List<McpProperties.ServerSpec> specs) {

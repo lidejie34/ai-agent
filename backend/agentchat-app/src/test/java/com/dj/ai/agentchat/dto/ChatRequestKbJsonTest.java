@@ -36,6 +36,21 @@ class ChatRequestKbJsonTest {
     }
 
     @Test
+    void deserialize_withToolScopeFields_populatedAndEmptyPreserved() {
+        ChatRequest subset = JSON.parseObject(
+                "{\"message\":\"查日志\",\"toolNames\":[\"analyze_log\"],\"mcpServers\":[\"easy-mysql\"]}",
+                ChatRequest.class);
+        assertThat(subset.toolNames()).containsExactly("analyze_log");
+        assertThat(subset.mcpServers()).containsExactly("easy-mysql");
+
+        // 显式空数组（全不挂）与缺省（null=全部）严格区分——三态不可归并
+        ChatRequest explicitNone = JSON.parseObject(
+                "{\"message\":\"查日志\",\"toolNames\":[],\"mcpServers\":[]}", ChatRequest.class);
+        assertThat(explicitNone.toolNames()).isNotNull().isEmpty();
+        assertThat(explicitNone.mcpServers()).isNotNull().isEmpty();
+    }
+
+    @Test
     void legacyConstructors_delegateNullKbFields() {
         ChatRequest three = new ChatRequest("m", List.of(), "sid");
         assertThat(three.sdd()).isNull();
@@ -49,5 +64,11 @@ class ChatRequestKbJsonTest {
         ChatRequest two = new ChatRequest("m", List.of());
         assertThat(two.sessionId()).isNull();
         assertThat(two.kbProjects()).isNull();
+
+        // 迭代12：6 参便捷构造（迭代10/11 调用点）委托 null 工具范围
+        ChatRequest six = new ChatRequest("m", List.of(), "sid", null, List.of("订单域"), List.of());
+        assertThat(six.kbProjects()).containsExactly("订单域");
+        assertThat(six.toolNames()).isNull();
+        assertThat(six.mcpServers()).isNull();
     }
 }

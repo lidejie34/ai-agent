@@ -21,28 +21,41 @@ import java.util.List;
  *                  非法字符/超长 400 KB_INVALID_FILTER；RAG 关闭时忽略（warn）
  * @param kbTags    知识库检索标签过滤（迭代10，可选）：非空时仅命中含任一标签的文档（OR 语义）；
  *                  与 kbProjects 组合为 AND；非法 400 KB_INVALID_FILTER
+ * @param toolNames 对话级 DB 工具选择（迭代12，可选，三态）：缺省/null=全部启用工具（现状）；
+ *                  空数组=不挂任何 DB 工具；非空=仅子集（未知名忽略）
+ * @param mcpServers 对话级 MCP server 组选择（迭代12，可选，三态）：缺省/null=全部 READY
+ *                  server；空数组=不挂任何 MCP 工具；非空=仅选中 server 组
  */
 public record ChatRequest(String message, List<ChatMessage> history, String sessionId, Boolean sdd,
-                          List<String> kbProjects, List<String> kbTags) {
+                          List<String> kbProjects, List<String> kbTags,
+                          List<String> toolNames, List<String> mcpServers) {
 
     /**
-     * 迭代5 兼容构造：无知识库过滤字段（null=不过滤，全库检索）。
+     * 迭代10/11 兼容构造：无对话级工具选择字段（null=全部工具，现状）。
+     */
+    public ChatRequest(String message, List<ChatMessage> history, String sessionId, Boolean sdd,
+                       List<String> kbProjects, List<String> kbTags) {
+        this(message, history, sessionId, sdd, kbProjects, kbTags, null, null);
+    }
+
+    /**
+     * 迭代5 兼容构造：无知识库过滤字段（null=不过滤，全库检索）、无工具选择字段。
      */
     public ChatRequest(String message, List<ChatMessage> history, String sessionId, Boolean sdd) {
-        this(message, history, sessionId, sdd, null, null);
+        this(message, history, sessionId, sdd, null, null, null, null);
     }
 
     /**
-     * 迭代1/2/3/4 兼容构造：无 sdd 字段（null=随开关）、无知识库过滤字段。
+     * 迭代1/2/3/4 兼容构造：无 sdd 字段（null=随开关）、无知识库过滤/工具选择字段。
      */
     public ChatRequest(String message, List<ChatMessage> history, String sessionId) {
-        this(message, history, sessionId, null, null, null);
+        this(message, history, sessionId, null, null, null, null, null);
     }
 
     /**
-     * 迭代1/2 兼容构造：无 sessionId（无状态）、无 sdd 字段、无知识库过滤字段。
+     * 迭代1/2 兼容构造：无 sessionId（无状态）、无 sdd 字段、无知识库过滤/工具选择字段。
      */
     public ChatRequest(String message, List<ChatMessage> history) {
-        this(message, history, null, null, null, null);
+        this(message, history, null, null, null, null, null, null);
     }
 }

@@ -7,7 +7,10 @@ import EmptyState from './components/EmptyState'
 import ChatInput from './components/ChatInput'
 import InlineError from './components/InlineError'
 import KbFilterBar, { type KbFilterValue } from './components/KbFilterBar'
+import ToolScopeBar, { type ToolScopeValue } from './components/ToolScopeBar'
+import { getSessionScope, putSessionScope, type SessionScope } from './api/sessions'
 import { useChatStream } from './hooks/useChatStream'
+import { useAvailableTools } from './hooks/useAvailableTools'
 import { useKbDimensions } from './hooks/useKbDimensions'
 import { useSessions } from './hooks/useSessions'
 import { useLocalDraft } from './hooks/useLocalDraft'
@@ -24,6 +27,76 @@ export default function App() {
   // 维度不可用（RAG 关/未维护）时选择器整体隐藏；值为页面级状态，随每轮发送
   const kbDims = useKbDimensions()
   const [kbFilter, setKbFilter] = useState<KbFilterValue>({ projects: [], tags: [] })
+  // 对话级工具范围（迭代12）：选择器选项来自 /api/tools/available，
+  // 工具不可用（开关关/无 MCP server）时选择器整体隐藏；随每轮发送 + 会话级持久化
+  const toolOpts = useAvailableTools()
+  const [toolScope, setToolScope] = useState<ToolScopeValue>({ enabled: true })
+
+  // ---- 会话级范围配置（迭代12）：恢复 + 防抖保存 ----
+  // 保存只在用户主动改选择器时触发（onChange），恢复（回填）绝不回写，避免 PUT 回环；
+  // 首轮绑定由后端从请求体 best-effort upsert 兜底（新会话尚无 sessionId 可 PUT）。
+  const sessionIdRef = useRef<string | null>(null)
+  sessionIdRef.current = chat.currentSessionId
+  const scopeSaveTimerRef = useRef<number | undefined>(undefined)
+
+  /** 页面态 → PUT 请求体三态映射：空数组 KB 维度 → null（默认全部）；开关关 → 显式 []（全不挂）。 */
+  const toScopeBody = (kb: KbFilterValue, ts: ToolScopeValue): SessionScope => ({
+    kbProjects: kb.projects.length > 0 ? kb.projects : null,
+    kbTags: kb.tags.length > 0 ? kb.tags : null,
+    toolNames: !ts.enabled ? [] : (ts.toolNames ?? null),
+    mcpServers: !ts.enabled ? [] : (ts.mcpServers ?? null),
+  })
+
+  const persistScopeDebounced = (kb: KbFilterValue, ts: ToolScopeValue) => {
+    window.clearTimeout(scopeSaveTimerRef.current)
+    scopeSaveTimerRef.current = window.setTimeout(() => {
+      const sid = sessionIdRef.current
+      if (!sid) return // 新会话未建：由首轮请求体 upsert 绑定，不落 PUT
+      void putSessionScope(sid, toScopeBody(kb, ts)).catch(() => {
+        // best-effort：保存失败不打断对话，下轮请求体仍会带最新范围
+      })
+    }, 400)
+  }
+
+  /** 切换到某会话后回填其持久化范围；失败静默（保持页面当前值）。 */
+  const restoreScope = async (sid: string) => {
+    try {
+      const scope = await getSessionScope(sid)
+      window.clearTimeout(scopeSaveTimerRef.current) // 丢弃切换前未发出的保存
+      setKbFilter({ projects: scope.kbProjects ?? [], tags: scope.kbTags ?? [] })
+      const allOff =
+        Array.isArray(scope.toolNames) && scope.toolNames.length === 0 &&
+        Array.isArray(scope.mcpServers) && scope.mcpServers.length === 0
+      setToolScope(
+        allOff
+          ? { enabled: false, toolNames: [], mcpServers: [] }
+          : {
+              enabled: true,
+              toolNames: scope.toolNames ?? undefined,
+              mcpServers: scope.mcpServers ?? undefined,
+            },
+      )
+    } catch {
+      // 范围读取失败不打扰会话切换
+    }
+  }
+
+  /** 新会话/删当前会话：范围回默认（全部 KB + 启用工具）。 */
+  const resetScope = () => {
+    window.clearTimeout(scopeSaveTimerRef.current)
+    setKbFilter({ projects: [], tags: [] })
+    setToolScope({ enabled: true })
+  }
+
+  const handleKbFilterChange = (v: KbFilterValue) => {
+    setKbFilter(v)
+    persistScopeDebounced(v, toolScope)
+  }
+
+  const handleToolScopeChange = (v: ToolScopeValue) => {
+    setToolScope(v)
+    persistScopeDebounced(kbFilter, v)
+  }
 
   // 刷新恢复：记忆模式下从 localStorage 读上次会话，拉历史回填；
   // 404（会话已删）静默回空态并清除记录；其他失败也不打断首屏。
@@ -37,6 +110,7 @@ export default function App() {
       const res = await sessions.selectSession(sid)
       if (res.kind === 'ok') {
         chat.showHistory(sid, res.messages)
+        void restoreScope(sid) // 迭代12：回填会话级范围
       } else if (res.kind === 'notfound') {
         writeStoredSessionId(null)
       }
@@ -59,6 +133,7 @@ export default function App() {
     const res = await sessions.selectSession(id)
     if (res.kind === 'ok') {
       chat.showHistory(id, res.messages)
+      void restoreScope(id) // 迭代12：回填该会话持久化的 KB/工具范围
     } else if (res.kind === 'notfound') {
       // 会话已被删除：侧边栏项已由 useSessions 移除，主区回空态（静默）
       chat.startNew()
@@ -72,6 +147,7 @@ export default function App() {
       message.warning(STREAMING_BLOCK_MESSAGE)
       return
     }
+    resetScope()
     chat.startNew()
   }
 
@@ -80,6 +156,7 @@ export default function App() {
       await sessions.removeSession(id)
       // 删的是当前会话 → 清空主区
       if (id === chat.currentSessionId) {
+        resetScope()
         chat.startNew()
       }
     } catch {
@@ -96,7 +173,8 @@ export default function App() {
   }
 
   const handleSend = (text: string) => {
-    void chat.send(text, kbFilter)
+    // 工具选择器隐藏（工具不可用）时不带范围键，请求形态与迭代11 逐字节一致
+    void chat.send(text, kbFilter, toolOpts.available ? toolScope : undefined)
     setDraft('')
   }
 
@@ -105,7 +183,7 @@ export default function App() {
       message.warning(STREAMING_BLOCK_MESSAGE)
       return
     }
-    void chat.send(prompt, kbFilter)
+    void chat.send(prompt, kbFilter, toolOpts.available ? toolScope : undefined)
   }
 
   return (
@@ -157,7 +235,16 @@ export default function App() {
           projects={kbDims.projects}
           tags={kbDims.tags}
           value={kbFilter}
-          onChange={setKbFilter}
+          onChange={handleKbFilterChange}
+          disabled={chat.isStreaming}
+        />
+      )}
+      {toolOpts.available && (
+        <ToolScopeBar
+          dbTools={toolOpts.dbTools}
+          mcpServers={toolOpts.mcpServers}
+          value={toolScope}
+          onChange={handleToolScopeChange}
           disabled={chat.isStreaming}
         />
       )}

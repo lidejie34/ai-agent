@@ -87,6 +87,50 @@ describe('useChatStream 知识库维度过滤（迭代10）', () => {
   })
 })
 
+describe('useChatStream 对话级工具范围（迭代12）', () => {
+  it('开关关：请求体显式 toolNames:[] / mcpServers:[]（本轮不挂任何工具）', async () => {
+    const fetchFn = mockFetchOnce(sseResponse([encodeSse.session(SID), encodeSse.done()]))
+    const { result } = renderHook(() => useChatStream({}))
+
+    await act(async () => {
+      await result.current.send('查日志', undefined, { enabled: false, toolNames: [], mcpServers: [] })
+    })
+
+    expect(lastFetchBody(fetchFn)).toMatchObject({
+      message: '查日志',
+      sessionId: '',
+      toolNames: [],
+      mcpServers: [],
+    })
+  })
+
+  it('子集：请求体带选中项；未选侧省略键（默认全部）', async () => {
+    const fetchFn = mockFetchOnce(sseResponse([encodeSse.session(SID), encodeSse.done()]))
+    const { result } = renderHook(() => useChatStream({}))
+
+    await act(async () => {
+      await result.current.send('查日志', undefined, { enabled: true, toolNames: ['analyze_log'] })
+    })
+
+    const body = lastFetchBody(fetchFn) as Record<string, unknown>
+    expect(body.toolNames).toEqual(['analyze_log'])
+    expect(body).not.toHaveProperty('mcpServers')
+  })
+
+  it('toolScope 未传：toolNames/mcpServers 两键全省略（与迭代11 请求形态一致）', async () => {
+    const fetchFn = mockFetchOnce(sseResponse([encodeSse.session(SID), encodeSse.done()]))
+    const { result } = renderHook(() => useChatStream({}))
+
+    await act(async () => {
+      await result.current.send('你好')
+    })
+
+    const body = lastFetchBody(fetchFn) as Record<string, unknown>
+    expect(body).not.toHaveProperty('toolNames')
+    expect(body).not.toHaveProperty('mcpServers')
+  })
+})
+
 describe('useChatStream 无状态（AC-18）', () => {
   it('remember=false：请求体省略 sessionId 键；无 session 帧；不确立会话 ID', async () => {
     const fetchFn = mockFetchOnce(sseResponse([encodeSse.chunk('无状态回复'), encodeSse.done()]))

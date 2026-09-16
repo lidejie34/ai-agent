@@ -5,12 +5,15 @@ import com.dj.ai.agentchat.tool.registry.ToolRegistry;
 import com.dj.ai.agentchat.util.TraceIds;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.lang.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 默认工具挂载实现（插入迭代 G；迭代4 T4 扩展 MCP 合并）：
@@ -49,8 +52,8 @@ public class DefaultToolSupport implements ToolSupport {
     }
 
     @Override
-    public ToolMount mountTools(String sessionId) {
-        List<ToolCallback> merged = mergeCallbacks();
+    public ToolMount mountTools(String sessionId, @Nullable ToolSelection selection) {
+        List<ToolCallback> merged = mergeCallbacks(selection);
         if (merged.isEmpty()) {
             // 零工具：调用方不触发 .tools()，请求与迭代 F 逐字节等价（AC-63）
             return null;
@@ -74,25 +77,35 @@ public class DefaultToolSupport implements ToolSupport {
     /**
      * DB 工具在前、MCP 工具在后；按工具名去重（LinkedHashSet 保序），
      * MCP 侧与 DB（或先入集合）同名时跳过 + WARN（D9/AC-14）。
+     *
+     * <p>迭代12 对话级选择：selection 各字段 null=该侧全量（现状）；空列表=该侧全不挂；
+     * 非空=仅命中子集（DB 按工具名；MCP 按 server key 源头精确过滤，未知名自然落空）。
      */
-    private List<ToolCallback> mergeCallbacks() {
-        List<ToolCallback> dbCallbacks = registry.toolCallbacks();
+    private List<ToolCallback> mergeCallbacks(@Nullable ToolSelection selection) {
+        List<ToolCallback> dbCallbacks = selectDb(selection) ? registry.toolCallbacks() : List.of();
         List<ToolCallback> merged = new ArrayList<>();
         LinkedHashSet<String> names = new LinkedHashSet<>();
+        Set<String> allowedTools = selection == null || selection.toolNames() == null
+                ? null : new HashSet<>(selection.toolNames());
 
         if (dbCallbacks != null) {
             for (ToolCallback cb : dbCallbacks) {
                 String name = callbackName(cb);
+                if (allowedTools != null && (name == null || !allowedTools.contains(name))) {
+                    continue; // 对话级选择未包含该 DB 工具
+                }
                 if (name == null || names.add(name)) {
                     merged.add(cb);
                 }
             }
         }
 
-        if (mcpToolProvider != null) {
+        if (mcpToolProvider != null && selectMcp(selection)) {
             ToolCallback[] mcpCallbacks;
             try {
-                mcpCallbacks = mcpToolProvider.getToolCallbacks();
+                mcpCallbacks = selection == null || selection.mcpServers() == null
+                        ? mcpToolProvider.getToolCallbacks()
+                        : mcpToolProvider.getToolCallbacks(new HashSet<>(selection.mcpServers()));
             } catch (Throwable t) {
                 // 供给侧异常绝不影响 DB 工具挂载
                 log.warn("MCP 工具快照获取异常，本次仅挂载 DB 工具: {}", t.getMessage());
@@ -108,6 +121,16 @@ public class DefaultToolSupport implements ToolSupport {
             }
         }
         return merged;
+    }
+
+    /** DB 侧是否参与挂载：未选择（null）=参与；空列表=全不挂。 */
+    private static boolean selectDb(@Nullable ToolSelection selection) {
+        return selection == null || selection.toolNames() == null || !selection.toolNames().isEmpty();
+    }
+
+    /** MCP 侧是否参与挂载：未选择（null）=参与；空列表=全不挂。 */
+    private static boolean selectMcp(@Nullable ToolSelection selection) {
+        return selection == null || selection.mcpServers() == null || !selection.mcpServers().isEmpty();
     }
 
     /** 工具名提取（null/异常安全：个别回调无 definition 时不阻断挂载）。 */

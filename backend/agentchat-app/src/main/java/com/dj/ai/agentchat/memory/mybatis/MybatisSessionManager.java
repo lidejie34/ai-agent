@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.dj.ai.agentchat.memory.SessionManager;
 import com.dj.ai.agentchat.memory.mapper.ChatMessageMapper;
 import com.dj.ai.agentchat.memory.mapper.ChatSessionMapper;
+import com.dj.ai.agentchat.memory.mapper.ChatSessionScopeMapper;
 import com.dj.ai.agentchat.memory.po.ChatMessagePO;
 import com.dj.ai.agentchat.memory.po.ChatSessionPO;
+import com.dj.ai.agentchat.memory.po.ChatSessionScopePO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,13 +33,23 @@ public class MybatisSessionManager implements SessionManager {
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ChatMemorySchemaInitializer schemaInitializer;
+    /** 迭代12：会话级范围配置（可空——3 参兼容构造缺席时 scope 方法空实现降级）。 */
+    private final ChatSessionScopeMapper chatSessionScopeMapper;
 
     public MybatisSessionManager(ChatSessionMapper chatSessionMapper,
                                  ChatMessageMapper chatMessageMapper,
                                  ChatMemorySchemaInitializer schemaInitializer) {
+        this(chatSessionMapper, chatMessageMapper, schemaInitializer, null);
+    }
+
+    public MybatisSessionManager(ChatSessionMapper chatSessionMapper,
+                                 ChatMessageMapper chatMessageMapper,
+                                 ChatMemorySchemaInitializer schemaInitializer,
+                                 ChatSessionScopeMapper chatSessionScopeMapper) {
         this.chatSessionMapper = chatSessionMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.schemaInitializer = schemaInitializer;
+        this.chatSessionScopeMapper = chatSessionScopeMapper;
     }
 
     @Override
@@ -72,8 +84,11 @@ public class MybatisSessionManager implements SessionManager {
     @Transactional
     public void deleteCascade(String sessionId) {
         schemaInitializer.ensureSchema();
-        // 先删消息后删会话：同事务，任一失败整体回滚，无孤儿消息
+        // 先删消息与范围配置（迭代12）后删会话：同事务，任一失败整体回滚，无孤儿行
         chatMessageMapper.deleteBySessionId(sessionId);
+        if (chatSessionScopeMapper != null) {
+            chatSessionScopeMapper.deleteBySessionId(sessionId);
+        }
         chatSessionMapper.deleteById(sessionId);
     }
 
@@ -87,5 +102,19 @@ public class MybatisSessionManager implements SessionManager {
         patch.setTitle(title);
         chatSessionMapper.updateById(patch);
         return chatSessionMapper.selectById(sessionId);
+    }
+
+    @Override
+    public ChatSessionScopePO findScope(String sessionId) {
+        schemaInitializer.ensureSchema();
+        return chatSessionScopeMapper == null ? null : chatSessionScopeMapper.selectById(sessionId);
+    }
+
+    @Override
+    public void upsertScope(ChatSessionScopePO scope) {
+        schemaInitializer.ensureSchema();
+        if (chatSessionScopeMapper != null) {
+            chatSessionScopeMapper.upsert(scope);
+        }
     }
 }

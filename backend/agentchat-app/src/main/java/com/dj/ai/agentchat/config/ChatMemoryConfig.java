@@ -5,6 +5,7 @@ import com.dj.ai.agentchat.memory.ConversationStore;
 import com.dj.ai.agentchat.memory.SessionManager;
 import com.dj.ai.agentchat.memory.mapper.ChatMessageMapper;
 import com.dj.ai.agentchat.memory.mapper.ChatSessionMapper;
+import com.dj.ai.agentchat.memory.mapper.ChatSessionScopeMapper;
 import com.dj.ai.agentchat.memory.mybatis.ChatMemorySchemaInitializer;
 import com.dj.ai.agentchat.memory.mybatis.ChatMemorySchemaStartupRunner;
 import com.dj.ai.agentchat.memory.mybatis.MybatisChatMemory;
@@ -61,8 +62,10 @@ public class ChatMemoryConfig {
     @Bean
     public SessionManager sessionManager(ChatSessionMapper chatSessionMapper,
                                          ChatMessageMapper chatMessageMapper,
-                                         ChatMemorySchemaInitializer chatMemorySchemaInitializer) {
-        return new MybatisSessionManager(chatSessionMapper, chatMessageMapper, chatMemorySchemaInitializer);
+                                         ChatMemorySchemaInitializer chatMemorySchemaInitializer,
+                                         ChatSessionScopeMapper chatSessionScopeMapper) {
+        return new MybatisSessionManager(chatSessionMapper, chatMessageMapper,
+                chatMemorySchemaInitializer, chatSessionScopeMapper);
     }
 
     /**

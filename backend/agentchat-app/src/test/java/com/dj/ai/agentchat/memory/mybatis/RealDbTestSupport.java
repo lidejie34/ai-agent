@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.MybatisSqlSessionFactoryBuilder;
 import com.dj.ai.agentchat.memory.mapper.ChatMessageMapper;
 import com.dj.ai.agentchat.memory.mapper.ChatSessionMapper;
+import com.dj.ai.agentchat.memory.mapper.ChatSessionScopeMapper;
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -72,11 +73,13 @@ public final class RealDbTestSupport {
                 new Environment("realdb", new JdbcTransactionFactory(), dataSource));
         configuration.addMapper(ChatSessionMapper.class);
         configuration.addMapper(ChatMessageMapper.class);
+        configuration.addMapper(ChatSessionScopeMapper.class);
         SqlSessionFactory factory = new MybatisSqlSessionFactoryBuilder().build(configuration);
         SqlSession sqlSession = factory.openSession(true);
         return new RealDbHarness(dataSource, sqlSession,
                 sqlSession.getMapper(ChatSessionMapper.class),
-                sqlSession.getMapper(ChatMessageMapper.class));
+                sqlSession.getMapper(ChatMessageMapper.class),
+                sqlSession.getMapper(ChatSessionScopeMapper.class));
     }
 
     /** 持有测试期资源；close 清理全部 evidence-test-% 数据并关闭会话/连接池。 */
@@ -86,6 +89,7 @@ public final class RealDbTestSupport {
         private final SqlSession sqlSession;
         public final ChatSessionMapper sessionMapper;
         public final ChatMessageMapper messageMapper;
+        public final ChatSessionScopeMapper scopeMapper;
         public final ChatMemorySchemaInitializer schemaInitializer;
         public final MybatisChatMemory chatMemory;
         public final MybatisSessionManager sessionManager;
@@ -93,14 +97,17 @@ public final class RealDbTestSupport {
                 new java.util.concurrent.CopyOnWriteArrayList<>();
 
         private RealDbHarness(DataSource dataSource, SqlSession sqlSession,
-                              ChatSessionMapper sessionMapper, ChatMessageMapper messageMapper) {
+                              ChatSessionMapper sessionMapper, ChatMessageMapper messageMapper,
+                              ChatSessionScopeMapper scopeMapper) {
             this.dataSource = dataSource;
             this.sqlSession = sqlSession;
             this.sessionMapper = sessionMapper;
             this.messageMapper = messageMapper;
+            this.scopeMapper = scopeMapper;
             this.schemaInitializer = new ChatMemorySchemaInitializer(dataSource);
             this.chatMemory = new MybatisChatMemory(sessionMapper, messageMapper, schemaInitializer);
-            this.sessionManager = new MybatisSessionManager(sessionMapper, messageMapper, schemaInitializer);
+            this.sessionManager = new MybatisSessionManager(
+                    sessionMapper, messageMapper, schemaInitializer, scopeMapper);
         }
 
         /** 底层数据源（回归 SQL 直跑等 JDBC 场景）。 */
@@ -119,6 +126,8 @@ public final class RealDbTestSupport {
                  java.sql.Statement stmt = conn.createStatement()) {
                 stmt.executeUpdate("DELETE FROM chat_message WHERE session_id LIKE '"
                         + SESSION_PREFIX + "%'");
+                stmt.executeUpdate("DELETE FROM chat_session_scope WHERE session_id LIKE '"
+                        + SESSION_PREFIX + "%'");
                 stmt.executeUpdate("DELETE FROM chat_session WHERE session_id LIKE '"
                         + SESSION_PREFIX + "%'");
             } catch (Exception e) {
@@ -127,6 +136,7 @@ public final class RealDbTestSupport {
             for (String sid : trackedSessionIds) {
                 try {
                     messageMapper.deleteBySessionId(sid);
+                    scopeMapper.deleteBySessionId(sid);
                     sessionMapper.deleteById(sid);
                 } catch (Exception e) {
                     // ignore

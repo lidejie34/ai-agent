@@ -6,6 +6,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * MCP 工具回调供给（插入迭代4，T4，FR-3）：实现 Spring AI
@@ -29,6 +30,15 @@ public class McpToolProvider implements ToolCallbackProvider {
     @Override
     public ToolCallback[] getToolCallbacks() {
         List<ToolCallback> snapshot = connectionManager.toolCallbacks();
+        return snapshot.toArray(new ToolCallback[0]);
+    }
+
+    /**
+     * 对话级 server 组过滤变体（迭代12 D4）：只取选中 server 的 READY 回调——
+     * 源头按 server key 精确过滤（不反推暴露名前缀，规避 64 字符截断歧义）。
+     */
+    public ToolCallback[] getToolCallbacks(Set<String> serverNames) {
+        List<ToolCallback> snapshot = connectionManager.toolCallbacks(serverNames);
         return snapshot.toArray(new ToolCallback[0]);
     }
 }

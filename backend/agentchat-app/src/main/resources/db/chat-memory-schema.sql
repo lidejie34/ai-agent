@@ -17,3 +17,15 @@ CREATE TABLE IF NOT EXISTS chat_message (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_session (session_id, id)
 );
+
+-- 迭代12：会话级范围配置（知识库维度 + 工具/MCP 选择），与 chat_session 1:1，
+-- 会话删除时经应用层级联删（MybatisSessionManager.deleteCascade 同事务）。
+-- 四列统一三态：NULL=默认全部；'[]'=显式全不选；非空 JSON 数组=子集。
+CREATE TABLE IF NOT EXISTS chat_session_scope (
+  session_id  VARCHAR(36) NOT NULL PRIMARY KEY COMMENT '所属会话（1:1）',
+  kb_projects VARCHAR(1000) NULL COMMENT 'JSON 数组；NULL=全部项目（默认）',
+  kb_tags     VARCHAR(1000) NULL COMMENT 'JSON 数组；NULL=全部标签（默认）',
+  tool_names  TEXT NULL COMMENT 'JSON 数组；NULL=全部 DB 工具（默认）',
+  mcp_servers VARCHAR(1000) NULL COMMENT 'JSON 数组；NULL=全部 READY MCP server（默认）',
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);

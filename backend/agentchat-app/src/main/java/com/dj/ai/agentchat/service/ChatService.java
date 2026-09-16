@@ -12,6 +12,8 @@ import com.dj.ai.agentchat.exception.MemoryPersistException;
 import com.dj.ai.agentchat.exception.MemoryUnavailableException;
 import com.dj.ai.agentchat.exception.ModelCallException;
 import com.dj.ai.agentchat.memory.ConversationStore;
+import com.dj.ai.agentchat.memory.SessionManager;
+import com.dj.ai.agentchat.memory.po.ChatSessionScopePO;
 import com.dj.ai.agentchat.memory.ToolEvidenceMessage;
 import com.dj.ai.agentchat.orchestration.OrchEventBridge;
 import com.dj.ai.agentchat.orchestration.OrchInput;
@@ -22,6 +24,7 @@ import com.dj.ai.agentchat.rag.advisor.RagAdvisor;
 import com.dj.ai.agentchat.rag.support.KbMetaValidator;
 import com.dj.ai.agentchat.tool.support.ToolEvidenceCollector;
 import com.dj.ai.agentchat.tool.support.ToolMount;
+import com.dj.ai.agentchat.tool.support.ToolSelection;
 import com.dj.ai.agentchat.tool.support.ToolSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -116,10 +119,12 @@ public class ChatService {
      * 知识库过滤校验走 RagProperties.Meta 默认上限，过滤参数本身因 advisor 缺席不生效）。
      */
     private final ObjectProvider<RagProperties> ragPropertiesProvider;
+    /** 迭代12：会话级范围配置持久化（记忆开关关闭 → null，upsert 跳过）。 */
+    private final ObjectProvider<SessionManager> sessionManagerProvider;
 
     /**
-     * 迭代10 起 @Autowired 主构造（14 参）：末参 {@code ObjectProvider<RagProperties>}
-     * 条件解析（RAG 开关关闭 → null，校验用默认上限）。
+     * 迭代12 起 @Autowired 主构造（15 参）：末参 {@code ObjectProvider<SessionManager>}
+     * 条件解析（记忆开关关闭 → null，范围配置 upsert 跳过）。
      */
     @Autowired
     public ChatService(ChatClient chatClient,
@@ -135,7 +140,8 @@ public class ChatService {
                        ObjectProvider<OrchestrationService> orchestrationProvider,
                        ObjectProvider<RagAdvisor> ragAdvisorProvider,
                        ChatEvidenceProperties evidenceProperties,
-                       ObjectProvider<RagProperties> ragPropertiesProvider) {
+                       ObjectProvider<RagProperties> ragPropertiesProvider,
+                       ObjectProvider<SessionManager> sessionManagerProvider) {
         this.chatClient = chatClient;
         this.apiKey = apiKey;
         this.configuredModel = configuredModel;
@@ -150,6 +156,31 @@ public class ChatService {
         this.ragAdvisorProvider = ragAdvisorProvider;
         this.evidenceProperties = evidenceProperties;
         this.ragPropertiesProvider = ragPropertiesProvider;
+        this.sessionManagerProvider = sessionManagerProvider;
+    }
+
+    /**
+     * 迭代10/11 的 14 参构造（非 @Autowired 便捷构造）：委托 15 参主构造，
+     * sessionManager provider 传 null（范围配置 upsert 跳过）——既有调用点零改动。
+     */
+    public ChatService(ChatClient chatClient,
+                       String apiKey,
+                       String configuredModel,
+                       int streamRetryMaxAttempts,
+                       Duration streamRetryMinBackoff,
+                       Duration streamRetryMaxBackoff,
+                       ObjectProvider<ConversationStore> conversationStoreProvider,
+                       int memoryMaxHistory,
+                       boolean memoryEnabled,
+                       ObjectProvider<ToolSupport> toolSupportProvider,
+                       ObjectProvider<OrchestrationService> orchestrationProvider,
+                       ObjectProvider<RagAdvisor> ragAdvisorProvider,
+                       ChatEvidenceProperties evidenceProperties,
+                       ObjectProvider<RagProperties> ragPropertiesProvider) {
+        this(chatClient, apiKey, configuredModel, streamRetryMaxAttempts,
+                streamRetryMinBackoff, streamRetryMaxBackoff, conversationStoreProvider,
+                memoryMaxHistory, memoryEnabled, toolSupportProvider, orchestrationProvider,
+                ragAdvisorProvider, evidenceProperties, ragPropertiesProvider, null);
     }
 
     /**
@@ -278,7 +309,9 @@ public class ChatService {
         ensureConfigured();
         MemoryContext memory = prepareMemory(request);
         List<Message> messages = assembleMessages(request, memory);
-        ToolMount toolMount = mountTools(memory.sessionId());
+        // 迭代12：有状态轮先把请求体 scope 绑定到会话（best-effort），再做对话级工具挂载
+        persistSessionScope(memory, request);
+        ToolMount toolMount = mountTools(memory.sessionId(), resolveToolSelection(request));
         // 迭代8：证据收集器在模型调用前挂到共享 bridge（编排 Executor 与普通路径同一 bridge）
         ToolEvidenceCollector evidenceCollector = attachEvidenceCollector(toolMount);
         log.debug("同步调用模型: 消息总数={}, 配置model={}, sessionId={}, 工具数={}, 编排={}",
@@ -337,8 +370,10 @@ public class ChatService {
         ensureConfigured();
         MemoryContext memory = prepareMemory(request);
         List<Message> messages = assembleMessages(request, memory);
+        // 迭代12：同同步路径——先绑定会话 scope（best-effort），再做对话级工具挂载
+        persistSessionScope(memory, request);
         // 工具挂载必须在 Flux.defer 之外创建：requestId/bridge 跨重订阅（重试）稳定，dedupKey 才稳定（S4）
-        ToolMount toolMount = mountTools(memory.sessionId());
+        ToolMount toolMount = mountTools(memory.sessionId(), resolveToolSelection(request));
         // 迭代8：证据收集器随 mount 一起在 defer 外创建并挂接——跨重订阅同一实例，
         // 重试重跑工具走幂等缓存早退，证据天然只记一次
         ToolEvidenceCollector evidenceCollector = attachEvidenceCollector(toolMount);
@@ -446,17 +481,83 @@ public class ChatService {
      * 请求级工具挂载（插入迭代 G）：工具支持缺失（开关关闭）返回 null；
      * 挂载过程任何异常都降级为无工具，绝不阻断对话（注册中心内部已对 DB 故障空集降级）。
      */
-    private ToolMount mountTools(String sessionId) {
+    private ToolMount mountTools(String sessionId, ToolSelection selection) {
         ToolSupport support = toolSupportProvider == null ? null : toolSupportProvider.getIfAvailable();
         if (support == null) {
             return null;
         }
         try {
-            return support.mountTools(sessionId);
+            return support.mountTools(sessionId, selection);
         } catch (RuntimeException e) {
             log.warn("工具挂载失败，本次对话降级为无工具: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 规整对话级工具选择（迭代12 D5）：两字段均缺省 → null（挂载路径与迭代11 逐字节一致）；
+     * 在场字段 trim/去空/去重（空数组保留三态=该类全不挂；未知名挂载时自然忽略）。
+     */
+    private static ToolSelection resolveToolSelection(ChatRequest request) {
+        if (request.toolNames() == null && request.mcpServers() == null) {
+            return null;
+        }
+        return new ToolSelection(
+                normalizeNames(request.toolNames()),
+                normalizeNames(request.mcpServers()));
+    }
+
+    /** 名单宽松规整：null 透传；否则 trim、去空、去重保序（空列表保持空=全不挂）。 */
+    private static List<String> normalizeNames(List<String> raw) {
+        if (raw == null) {
+            return null;
+        }
+        return raw.stream()
+                .filter(v -> v != null && !v.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * 会话级范围配置绑定（迭代12 D2）：仅<b>有状态轮</b>且请求体携带任一 scope 字段时
+     * 全量 upsert（首轮新建随 createSessionIfAbsent 后自然绑定；无状态轮零交互，FR-3）。
+     * best-effort：任何异常仅 warn，绝不阻断对话（NFR-2）。
+     */
+    private void persistSessionScope(MemoryContext memory, ChatRequest request) {
+        if (!memory.stateful()) {
+            return;
+        }
+        if (request.kbProjects() == null && request.kbTags() == null
+                && request.toolNames() == null && request.mcpServers() == null) {
+            return;
+        }
+        SessionManager sessionManager = sessionManagerProvider == null
+                ? null : sessionManagerProvider.getIfAvailable();
+        if (sessionManager == null) {
+            return;
+        }
+        try {
+            RagProperties.Meta meta = ragMeta();
+            ChatSessionScopePO po = new ChatSessionScopePO();
+            po.setSessionId(memory.sessionId());
+            // kb 两维：null→NULL（全部）；在场→白名单规整后 JSON（validate 已把关，此处不再抛）
+            po.setKbProjects(scopeJson(request.kbProjects() == null ? null
+                    : KbMetaValidator.normalizeProjects(request.kbProjects(), meta.getMaxProjectLength())));
+            po.setKbTags(scopeJson(request.kbTags() == null ? null
+                    : KbMetaValidator.normalizeTags(request.kbTags(), meta.getMaxTags(), meta.getMaxTagLength())));
+            po.setToolNames(scopeJson(normalizeNames(request.toolNames())));
+            po.setMcpServers(scopeJson(normalizeNames(request.mcpServers())));
+            sessionManager.upsertScope(po);
+        } catch (RuntimeException e) {
+            log.warn("会话范围配置绑定失败（忽略，不影响对话）: sessionId={}, {}",
+                    memory.sessionId(), e.getMessage());
+        }
+    }
+
+    /** 三态序列化：null → null（列 NULL=默认全部）；空/非空 → JSON 数组串。 */
+    private static String scopeJson(List<String> values) {
+        return values == null ? null : com.alibaba.fastjson2.JSON.toJSONString(values);
     }
 
     /**

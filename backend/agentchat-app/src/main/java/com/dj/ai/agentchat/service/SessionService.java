@@ -1,14 +1,21 @@
 package com.dj.ai.agentchat.service;
 
+import com.alibaba.fastjson2.JSON;
 import com.dj.ai.agentchat.dto.session.SessionDeleteResult;
 import com.dj.ai.agentchat.dto.session.SessionMessageView;
+import com.dj.ai.agentchat.dto.session.SessionScopeUpdate;
+import com.dj.ai.agentchat.dto.session.SessionScopeView;
 import com.dj.ai.agentchat.dto.session.SessionSummary;
 import com.dj.ai.agentchat.exception.InvalidChatRequestException;
+import com.dj.ai.agentchat.exception.InvalidKbFilterException;
 import com.dj.ai.agentchat.exception.MemoryUnavailableException;
 import com.dj.ai.agentchat.exception.SessionNotFoundException;
 import com.dj.ai.agentchat.memory.SessionManager;
 import com.dj.ai.agentchat.memory.po.ChatMessagePO;
 import com.dj.ai.agentchat.memory.po.ChatSessionPO;
+import com.dj.ai.agentchat.memory.po.ChatSessionScopePO;
+import com.dj.ai.agentchat.rag.RagProperties;
+import com.dj.ai.agentchat.rag.support.KbMetaValidator;
 import com.dj.ai.agentchat.util.SessionIds;
 import com.dj.ai.agentchat.util.TextTitleUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -143,6 +150,66 @@ public class SessionService {
         }
     }
 
+    /**
+     * 读会话级范围配置（迭代12 FR-3/D3）：配置行缺席 → 四字段全 null 视图（全默认）。
+     * 仅服务 UI 恢复，不回灌模型链路。
+     */
+    public SessionScopeView getScope(String sessionId) {
+        SessionManager manager = requireManager();
+        SessionIds.requireUuid(sessionId);
+        findExisting(manager, sessionId);
+        try {
+            ChatSessionScopePO po = manager.findScope(sessionId);
+            if (po == null) {
+                return SessionScopeView.ALL_DEFAULT;
+            }
+            return new SessionScopeView(
+                    parseJsonArray(po.getKbProjects()),
+                    parseJsonArray(po.getKbTags()),
+                    parseJsonArray(po.getToolNames()),
+                    parseJsonArray(po.getMcpServers()));
+        } catch (DataAccessException e) {
+            throw unavailable(e);
+        }
+    }
+
+    /**
+     * 全量覆盖会话级范围配置（迭代12 D2）：kb 两维经 KbMetaValidator 白名单校验
+     * （非法 400 KB_INVALID_FILTER，与对话请求同口径）；toolNames/mcpServers 仅
+     * trim/去空/去重（未知名容忍——工具可能事后下线，恢复时自然过滤）。
+     */
+    public SessionScopeView updateScope(String sessionId, SessionScopeUpdate update) {
+        SessionManager manager = requireManager();
+        SessionIds.requireUuid(sessionId);
+        findExisting(manager, sessionId);
+        RagProperties.Meta meta = new RagProperties.Meta();
+        List<String> kbProjects;
+        List<String> kbTags;
+        try {
+            // 三态保持：入参 null 直接得 null（不经过规整器的 null→空集合归一）
+            kbProjects = update == null || update.kbProjects() == null ? null
+                    : KbMetaValidator.normalizeProjects(update.kbProjects(), meta.getMaxProjectLength());
+            kbTags = update == null || update.kbTags() == null ? null
+                    : KbMetaValidator.normalizeTags(update.kbTags(), meta.getMaxTags(), meta.getMaxTagLength());
+        } catch (KbMetaValidator.KbMetaInvalidException e) {
+            throw new InvalidKbFilterException("知识库过滤参数非法：" + e.getMessage());
+        }
+        List<String> toolNames = normalizeLoose(update == null ? null : update.toolNames());
+        List<String> mcpServers = normalizeLoose(update == null ? null : update.mcpServers());
+        ChatSessionScopePO po = new ChatSessionScopePO();
+        po.setSessionId(sessionId);
+        po.setKbProjects(toJson(kbProjects));
+        po.setKbTags(toJson(kbTags));
+        po.setToolNames(toJson(toolNames));
+        po.setMcpServers(toJson(mcpServers));
+        try {
+            manager.upsertScope(po);
+            return new SessionScopeView(kbProjects, kbTags, toolNames, mcpServers);
+        } catch (DataAccessException e) {
+            throw unavailable(e);
+        }
+    }
+
     // ---- 内部 ----
 
     private SessionManager requireManager() {
@@ -192,6 +259,36 @@ public class SessionService {
             map.putIfAbsent(message.getSessionId(), message);
         }
         return map;
+    }
+
+    /** 工具/server 名单宽松规整（迭代12）：trim、去空、去重保序；null 原样透传。 */
+    private static List<String> normalizeLoose(List<String> raw) {
+        if (raw == null) {
+            return null;
+        }
+        return raw.stream()
+                .filter(v -> v != null && !v.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    /** 三态序列化：null → null（列 NULL）；空/非空 → JSON 数组串。 */
+    private static String toJson(List<String> values) {
+        return values == null ? null : JSON.toJSONString(values);
+    }
+
+    /** 三态反序列化：null/空白 → null；其余按 JSON 数组解析（坏数据防御为空数组）。 */
+    private static List<String> parseJsonArray(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return JSON.parseArray(json, String.class);
+        } catch (RuntimeException e) {
+            log.warn("会话范围配置 JSON 解析失败，按空数组降级: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     private static MemoryUnavailableException unavailable(DataAccessException e) {

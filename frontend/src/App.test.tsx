@@ -238,4 +238,230 @@ describe('App 集成（AC-17~29）', () => {
       expect(body).not.toHaveProperty('kbTags')
     })
   })
+
+  // ---- 迭代12：对话级工具/MCP 选择 + 会话级范围持久化 ----
+
+  /** 在默认路由上叠加 tools/scope 路由。 */
+  function withToolsRoutes(
+    fetchFn: ReturnType<typeof vi.fn>,
+    scopeGet: unknown = { kbProjects: null, kbTags: null, toolNames: null, mcpServers: null },
+  ) {
+    const original = fetchFn.getMockImplementation()!
+    fetchFn.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u.includes('/api/tools/available')) {
+        return json({
+          dbTools: [
+            { name: 'analyze_log', description: '' },
+            { name: 'log_error_count', description: '' },
+          ],
+          mcpServers: [
+            { name: 'easy-mysql', status: 'READY', tools: ['easy-mysql_query'] },
+            { name: 'dead-server', status: 'UNAVAILABLE', tools: [] },
+          ],
+        })
+      }
+      if (u.includes('/scope')) {
+        if ((init?.method ?? 'GET') === 'PUT') return json(JSON.parse(String(init?.body)))
+        return json(scopeGet)
+      }
+      return original(url, init)
+    })
+  }
+
+  it('工具可用：选择器渲染（UNAVAILABLE server 不进选项）；关闭开关后发送，请求体显式 [][]（全不挂）', async () => {
+    const { fetchFn } = setupApp()
+    withToolsRoutes(fetchFn)
+    render(<App />)
+
+    await screen.findByTestId('tool-scope-bar')
+    // MCP 下拉只暴露 READY server
+    const mcpSel = screen.getByTestId('chat-mcp-servers')
+    fireEvent.mouseDown(mcpSel.querySelector('.ant-select-selector') as HTMLElement)
+    expect(
+      await screen.findByText('easy-mysql', { selector: '.ant-select-item-option-content' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('dead-server', { selector: '.ant-select-item-option-content' }),
+    ).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    // 关闭「启用工具」→ 本轮不挂任何工具
+    await userEvent.click(screen.getByTestId('chat-tool-enabled'))
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '你好' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.toolNames).toEqual([])
+      expect(body.mcpServers).toEqual([])
+    })
+  })
+
+  it('工具子集：选内置工具后发送，请求体带 toolNames，未选 MCP 侧省略键', async () => {
+    const { fetchFn } = setupApp()
+    withToolsRoutes(fetchFn)
+    render(<App />)
+
+    await screen.findByTestId('tool-scope-bar')
+    const dbSel = screen.getByTestId('chat-tool-names')
+    fireEvent.mouseDown(dbSel.querySelector('.ant-select-selector') as HTMLElement)
+    await userEvent.click(
+      await screen.findByText('analyze_log', { selector: '.ant-select-item-option-content' }),
+    )
+    await userEvent.keyboard('{Escape}')
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '查日志' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.toolNames).toEqual(['analyze_log'])
+      expect(body).not.toHaveProperty('mcpServers')
+    })
+  })
+
+  it('会话级持久化：有当前会话时改选择器 → 防抖 PUT /scope（三态映射）', async () => {
+    const { fetchFn } = setupApp({ initialSessions: [sessionSummary()] })
+    withToolsRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await screen.findByTestId('tool-scope-bar')
+
+    // 切入既有会话（scope GET 返回全默认）
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await waitFor(() =>
+      expect(fetchFn.mock.calls.some(([u]) => String(u).includes('/scope'))).toBe(true),
+    )
+    await new Promise((r) => setTimeout(r, 50)) // 等回填 setState 落定，避免覆盖后续选择
+
+    // 选内置工具子集 → 触发防抖保存
+    const dbSel = screen.getByTestId('chat-tool-names')
+    fireEvent.mouseDown(dbSel.querySelector('.ant-select-selector') as HTMLElement)
+    await userEvent.click(
+      await screen.findByText('analyze_log', { selector: '.ant-select-item-option-content' }),
+    )
+    await userEvent.keyboard('{Escape}')
+
+    await waitFor(
+      () => {
+        const puts = fetchFn.mock.calls.filter(
+          ([u, i]) =>
+            String(u).includes(`/api/sessions/${SID}/scope`) &&
+            ((i as RequestInit | undefined)?.method ?? 'GET') === 'PUT',
+        )
+        expect(puts).toHaveLength(1)
+        const body = JSON.parse(String((puts[0][1] as RequestInit).body)) as Record<string, unknown>
+        // 三态：KB 未选 → null；工具子集；MCP 未选 → null
+        expect(body).toEqual({
+          kbProjects: null,
+          kbTags: null,
+          toolNames: ['analyze_log'],
+          mcpServers: null,
+        })
+      },
+      { timeout: 2000 },
+    )
+  })
+
+  it('会话切换回填：GET scope 子集 → 选择器恢复，随后发送带恢复的范围键', async () => {
+    const { fetchFn } = setupApp({ initialSessions: [sessionSummary()] })
+    withToolsRoutes(fetchFn, {
+      kbProjects: ['订单域'],
+      kbTags: null,
+      toolNames: ['analyze_log'],
+      mcpServers: ['easy-mysql'],
+    })
+    // KB 维度也可用，验证 KB 范围一并回填
+    const withKb = fetchFn.getMockImplementation()!
+    fetchFn.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/kb/dimensions')) {
+        return json({ projects: ['订单域', '物流域'], tags: ['售后'] })
+      }
+      return withKb(url, init)
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await screen.findByTestId('tool-scope-bar')
+
+    // 等待回填可见：工具选择器显示已恢复的选中项
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-tool-names').textContent).toContain('analyze_log'),
+    )
+
+    // 回填生效后发送：范围键全部来自持久化值
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '继续' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.sessionId).toBe(SID)
+      expect(body.kbProjects).toEqual(['订单域'])
+      expect(body).not.toHaveProperty('kbTags')
+      expect(body.toolNames).toEqual(['analyze_log'])
+      expect(body.mcpServers).toEqual(['easy-mysql'])
+    })
+    // 恢复不回写：全程无 PUT
+    expect(
+      fetchFn.mock.calls.some(
+        ([u, i]) =>
+          String(u).includes('/scope') && ((i as RequestInit | undefined)?.method ?? 'GET') === 'PUT',
+      ),
+    ).toBe(false)
+  })
+
+  it('新会话首轮绑定：无 sessionId 时改选择器不发 PUT；发送时请求体带范围键', async () => {
+    const { fetchFn } = setupApp()
+    withToolsRoutes(fetchFn)
+    render(<App />)
+    await screen.findByTestId('tool-scope-bar')
+
+    // 尚无会话：改选择器 → 不得 PUT
+    await userEvent.click(screen.getByTestId('chat-tool-enabled'))
+    await new Promise((r) => setTimeout(r, 600)) // 越过 400ms 防抖窗
+    expect(
+      fetchFn.mock.calls.some(
+        ([u, i]) =>
+          String(u).includes('/scope') && ((i as RequestInit | undefined)?.method ?? 'GET') === 'PUT',
+      ),
+    ).toBe(false)
+
+    // 首轮发送：请求体携带范围（后端据此 upsert 绑定新会话）
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '你好' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body.toolNames).toEqual([])
+      expect(body.mcpServers).toEqual([])
+    })
+  })
+
+  it('工具不可用（404）：选择器隐藏，发送不带工具键（与迭代11 形态一致）', async () => {
+    const { fetchFn } = setupApp()
+    render(<App />)
+    await waitFor(() => expect(screen.queryByTestId('sidebar-skeleton')).toBeNull())
+
+    expect(screen.queryByTestId('tool-scope-bar')).toBeNull()
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '你好' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+
+    await waitFor(() => {
+      const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
+      expect(streams).toHaveLength(1)
+      const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
+      expect(body).not.toHaveProperty('toolNames')
+      expect(body).not.toHaveProperty('mcpServers')
+    })
+  })
 })
