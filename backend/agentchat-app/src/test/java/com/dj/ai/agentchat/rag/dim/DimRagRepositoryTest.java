@@ -5,9 +5,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -16,38 +13,27 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 迭代10 追加：DimRepository SQL 单测（mock JdbcTemplate 钉 SQL 文本与参数序）——
+ * 迭代10 迁移：DimRagRepository SQL 单测（mock JdbcTemplate 钉 SQL 文本与参数序）——
  * 标签改名/删除联动的 JSONB 操作符（pgjdbc `??` 转义 + `?::text` cast）、
- * 项目改名联动、引用计数、标签列表 jsonb 展开。真实 PG 语义由冒烟覆盖。
+ * 项目改名文档联动、引用计数（单项目 + 分组）、标签列表 jsonb 展开。
+ * dim_project CRUD 已迁 MySQL 侧 DimProjectRepository。真实 PG 语义由冒烟覆盖。
  */
-class DimRepositoryTest {
+class DimRagRepositoryTest {
 
     private JdbcTemplate jdbc;
-    private DimRepository repository;
+    private DimRagRepository repository;
 
     @BeforeEach
     void setUp() {
         jdbc = mock(JdbcTemplate.class);
-        repository = new DimRepository(jdbc);
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void listProjects_sqlCarriesDocCountSubquery() {
-        when(jdbc.query(contains("FROM dim_project"), any(RowMapper.class)))
-                .thenReturn(List.of());
-
-        repository.listProjects();
-
-        verify(jdbc).query(contains("(SELECT count(*) FROM rag_document d WHERE d.project = p.name)"),
-                any(RowMapper.class));
+        repository = new DimRagRepository(jdbc);
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void listTags_sqlExpandsJsonbArray() {
         when(jdbc.query(contains("jsonb_array_elements_text"), any(RowMapper.class)))
-                .thenReturn(List.of());
+                .thenReturn(java.util.List.of());
 
         repository.listTags();
 
@@ -91,34 +77,23 @@ class DimRepositoryTest {
         when(jdbc.queryForObject(contains("tags ?? ?::text"), eq(Long.class), eq("售后")))
                 .thenReturn(3L);
 
-        long n = repository.countDocsByTag("售后");
-
-        assertThat(n).isEqualTo(3L);
+        org.assertj.core.api.Assertions.assertThat(repository.countDocsByTag("售后")).isEqualTo(3L);
     }
 
     @Test
-    void projectExists_queriesByName() {
-        when(jdbc.queryForObject(contains("FROM dim_project WHERE name = ?"),
-                eq(Long.class), eq("订单域"))).thenReturn(1L);
+    void countDocsByProject_queriesByName() {
+        when(jdbc.queryForObject(contains("FROM rag_document WHERE project = ?"),
+                eq(Long.class), eq("订单域"))).thenReturn(2L);
 
-        assertThat(repository.projectExists("订单域")).isTrue();
+        org.assertj.core.api.Assertions.assertThat(repository.countDocsByProject("订单域"))
+                .isEqualTo(2L);
     }
 
     @Test
-    void insertProject_returnsGeneratedId() {
-        when(jdbc.queryForObject(contains("INSERT INTO dim_project"), eq(Long.class),
-                eq("订单域"), eq("订单相关制度"))).thenReturn(11L);
+    @SuppressWarnings("unchecked")
+    void countDocsGroupByProject_groupsNonNullProjects() {
+        repository.countDocsGroupByProject();
 
-        long id = repository.insertProject("订单域", "订单相关制度");
-
-        assertThat(id).isEqualTo(11L);
-    }
-
-    @Test
-    void deleteProject_deletesById() {
-        when(jdbc.update(contains("DELETE FROM dim_project WHERE id = ?"), eq(5L)))
-                .thenReturn(1);
-
-        assertThat(repository.deleteProject(5L)).isEqualTo(1);
+        verify(jdbc).query(contains("GROUP BY project"), any(org.springframework.jdbc.core.RowCallbackHandler.class));
     }
 }

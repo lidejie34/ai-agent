@@ -1,4 +1,4 @@
-package com.dj.ai.agentchat.rag.dim;
+package com.dj.ai.agentchat.dim;
 
 import com.dj.ai.agentchat.config.web.FastJsonWebConfig;
 import com.dj.ai.agentchat.rag.admin.KbAdminException;
@@ -15,8 +15,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -27,14 +27,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 迭代10 追加：DimAdminController 切片——项目 CRUD（201/409/404/400）、
- * 标签列表/改名/删除透传、鉴权拦截（无 token 401、rag 关 503）。
+ * 迭代10 迁移：DimProjectAdminController 切片（原 DimAdminControllerTest 的项目半边）——
+ * 项目 CRUD（201/409/404/204）、鉴权拦截（无 token 401）。
+ * 与标签端点差异：dim/projects 仅 TOKEN_ONLY 闸门，RAG 关闭也可达（gate 单测在
+ * AdminGateResolverTest；此处 rag.enabled=false 验证控制器本身不依赖 rag bean）。
  */
-@WebMvcTest(DimAdminController.class)
+@WebMvcTest(DimProjectAdminController.class)
 @Import(FastJsonWebConfig.class)
-@TestPropertySource(properties = {"app.admin.token=" + DimAdminControllerTest.TOKEN,
-        "app.tools.enabled=true", "app.rag.enabled=true"})
-class DimAdminControllerTest {
+@TestPropertySource(properties = {"app.admin.token=" + DimProjectAdminControllerTest.TOKEN,
+        "app.tools.enabled=true", "app.rag.enabled=false"})
+class DimProjectAdminControllerTest {
 
     static final String TOKEN = "test-admin-token";
     private static final String HDR = AdminAuthInterceptor.ADMIN_TOKEN_HEADER;
@@ -43,7 +45,7 @@ class DimAdminControllerTest {
     private MockMvc mvc;
 
     @MockitoBean
-    private DimAdminService service;
+    private DimProjectService service;
 
     private static DimProject project(long id, String name, long docCount) {
         return new DimProject(id, name, "备注", docCount,
@@ -120,37 +122,6 @@ class DimAdminControllerTest {
                 .andExpect(status().isNoContent());
 
         verify(service).deleteProject(5L);
-    }
-
-    @Test
-    void listTags_returnsViews() throws Exception {
-        when(service.listTags()).thenReturn(List.of(new DimTagView("售后", 5)));
-
-        mvc.perform(get("/api/admin/dim/tags").header(HDR, TOKEN))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].name").value("售后"))
-                .andExpect(jsonPath("$[0].docCount").value(5));
-    }
-
-    @Test
-    void renameTag_happy_returnsAffectedDocs() throws Exception {
-        when(service.renameTag("退货", "换货")).thenReturn(2);
-
-        mvc.perform(patch("/api/admin/dim/tags")
-                        .header(HDR, TOKEN)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"from\":\"退货\",\"to\":\"换货\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.affectedDocs").value(2));
-    }
-
-    @Test
-    void deleteTag_happy_returnsAffectedDocs() throws Exception {
-        when(service.deleteTag("退货")).thenReturn(1);
-
-        mvc.perform(delete("/api/admin/dim/tags/退货").header(HDR, TOKEN))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.affectedDocs").value(1));
     }
 
     @Test

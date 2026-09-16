@@ -3,7 +3,7 @@ package com.dj.ai.agentchat.rag.admin.service;
 import com.dj.ai.agentchat.rag.RagProperties;
 import com.dj.ai.agentchat.rag.admin.KbAdminException;
 import com.dj.ai.agentchat.rag.chunk.TextChunker;
-import com.dj.ai.agentchat.rag.dim.DimRepository;
+import com.dj.ai.agentchat.dim.DimProjectService;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingException;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingService;
 import com.dj.ai.agentchat.rag.schema.RagSchemaInitializer;
@@ -44,20 +44,20 @@ public class KbDocumentService {
     private final TextChunker chunker;
     private final RagProperties properties;
     private final RagSchemaInitializer schemaInitializer;
-    private final DimRepository dimRepository;
+    private final DimProjectService dimProjectService;
 
     public KbDocumentService(KbRepository repository,
                              RagEmbeddingService embeddingService,
                              TextChunker chunker,
                              RagProperties properties,
                              RagSchemaInitializer schemaInitializer,
-                             DimRepository dimRepository) {
+                             DimProjectService dimProjectService) {
         this.repository = repository;
         this.embeddingService = embeddingService;
         this.chunker = chunker;
         this.properties = properties;
         this.schemaInitializer = schemaInitializer;
-        this.dimRepository = dimRepository;
+        this.dimProjectService = dimProjectService;
     }
 
     /** 上传并同步完成切片+向量化；成功返回 READY 文档视图（不含原文）。迭代6 签名（无维度元数据）。 */
@@ -232,7 +232,7 @@ public class KbDocumentService {
      * 否则 400 KB_INVALID_PROJECT 并提示去维度维护页创建；null（未打标）放行。
      */
     private void requireManagedProject(String normalizedProject) {
-        if (normalizedProject != null && !dimRepository.projectExists(normalizedProject)) {
+        if (normalizedProject != null && !dimProjectService.projectExists(normalizedProject)) {
             throw new KbAdminException(KB_INVALID_PROJECT,
                     "项目不存在，请先在「维度维护」页创建项目：" + normalizedProject);
         }

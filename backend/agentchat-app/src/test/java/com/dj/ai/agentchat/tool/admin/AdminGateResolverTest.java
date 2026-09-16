@@ -27,10 +27,22 @@ class AdminGateResolverTest {
         assertThat(resolver.gateFor("/api/admin/kb")).isEqualTo(AdminGateResolver.Gate.RAG);
         assertThat(resolver.gateFor("/api/admin/kb/documents")).isEqualTo(AdminGateResolver.Gate.RAG);
         assertThat(resolver.gateFor("/api/admin/kb/health")).isEqualTo(AdminGateResolver.Gate.RAG);
-        // 迭代10 追加：维度维护随 RAG 闸门（dim_project 存于 rag PG 库）
-        assertThat(resolver.gateFor("/api/admin/dim")).isEqualTo(AdminGateResolver.Gate.RAG);
-        assertThat(resolver.gateFor("/api/admin/dim/projects")).isEqualTo(AdminGateResolver.Gate.RAG);
+    }
+
+    @Test
+    void dimFamily_tagsRagGate_projectsTokenOnly() {
+        // 迭代10 迁移：标签是 rag_document 派生视图 → RAG 闸门；
+        // dim_project 已迁 MySQL 主库 → projects 仅令牌（RAG 关闭也能维护项目）
         assertThat(resolver.gateFor("/api/admin/dim/tags")).isEqualTo(AdminGateResolver.Gate.RAG);
+        assertThat(resolver.gateFor("/api/admin/dim/tags/售后")).isEqualTo(AdminGateResolver.Gate.RAG);
+        assertThat(resolver.gateFor("/api/admin/dim")).isEqualTo(AdminGateResolver.Gate.TOKEN_ONLY);
+        assertThat(resolver.gateFor("/api/admin/dim/projects"))
+                .isEqualTo(AdminGateResolver.Gate.TOKEN_ONLY);
+        assertThat(resolver.gateFor("/api/admin/dim/projects/7"))
+                .isEqualTo(AdminGateResolver.Gate.TOKEN_ONLY);
+        // 二级段边界：tagsBackup 等伪造前缀不得误判为 RAG
+        assertThat(resolver.gateFor("/api/admin/dim/tagsBackup"))
+                .isEqualTo(AdminGateResolver.Gate.TOKEN_ONLY);
     }
 
     @Test

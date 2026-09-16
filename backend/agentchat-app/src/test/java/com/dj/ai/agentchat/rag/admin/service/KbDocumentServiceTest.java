@@ -3,7 +3,7 @@ package com.dj.ai.agentchat.rag.admin.service;
 import com.dj.ai.agentchat.rag.RagProperties;
 import com.dj.ai.agentchat.rag.admin.KbAdminException;
 import com.dj.ai.agentchat.rag.chunk.TextChunker;
-import com.dj.ai.agentchat.rag.dim.DimRepository;
+import com.dj.ai.agentchat.dim.DimProjectService;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingException;
 import com.dj.ai.agentchat.rag.embed.RagEmbeddingService;
 import com.dj.ai.agentchat.rag.schema.RagSchemaInitializer;
@@ -55,7 +55,7 @@ class KbDocumentServiceTest {
         properties = new RagProperties();
         TextChunker chunker = new TextChunker(properties.getChunk());
         service = new KbDocumentService(repository, embeddingService, chunker,
-                properties, schemaInitializer, mock(DimRepository.class));
+                properties, schemaInitializer, mock(DimProjectService.class));
     }
 
     private byte[] utf8(String s) {
@@ -148,7 +148,7 @@ class KbDocumentServiceTest {
         properties.getUpload().setMaxChunks(1);
         service = new KbDocumentService(repository, embeddingService,
                 new TextChunker(10, 0, true), properties, schemaInitializer,
-                mock(DimRepository.class));
+                mock(DimProjectService.class));
         assertThatThrownBy(() -> service.upload("a.md", utf8("一二三四五六七八九十一二")))
                 .isInstanceOf(KbAdminException.class)
                 .hasMessageContaining("切片数");
