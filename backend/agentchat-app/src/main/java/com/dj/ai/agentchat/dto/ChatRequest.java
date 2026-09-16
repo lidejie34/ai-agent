@@ -16,13 +16,14 @@ import java.util.List;
  *                  字段缺省或显式 {@code null} = 随服务端 {@code app.sdd.enabled} 总开关；
  *                  {@code true} = 请求编排（总开关关闭时 warn 忽略，不报错）；
  *                  {@code false} = 强制走迭代4 普通对话路径（总开关开启时也生效）
- * @param kbProject 知识库检索项目过滤（迭代10，可选）：非空时 RAG 检索仅命中该项目文档；
+ * @param kbProjects 知识库检索项目过滤（迭代10 单选；迭代11 升级多选，可选）：非空时
+ *                  RAG 检索仅命中属于任一选中项目的文档（OR 语义）；
  *                  非法字符/超长 400 KB_INVALID_FILTER；RAG 关闭时忽略（warn）
  * @param kbTags    知识库检索标签过滤（迭代10，可选）：非空时仅命中含任一标签的文档（OR 语义）；
- *                  与 kbProject 组合为 AND；非法 400 KB_INVALID_FILTER
+ *                  与 kbProjects 组合为 AND；非法 400 KB_INVALID_FILTER
  */
 public record ChatRequest(String message, List<ChatMessage> history, String sessionId, Boolean sdd,
-                          String kbProject, List<String> kbTags) {
+                          List<String> kbProjects, List<String> kbTags) {
 
     /**
      * 迭代5 兼容构造：无知识库过滤字段（null=不过滤，全库检索）。

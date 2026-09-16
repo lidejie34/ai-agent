@@ -23,7 +23,7 @@ export default function App() {
   // 知识库维度过滤（迭代10 追加）：选择器选项来自 /api/kb/dimensions，
   // 维度不可用（RAG 关/未维护）时选择器整体隐藏；值为页面级状态，随每轮发送
   const kbDims = useKbDimensions()
-  const [kbFilter, setKbFilter] = useState<KbFilterValue>({ tags: [] })
+  const [kbFilter, setKbFilter] = useState<KbFilterValue>({ projects: [], tags: [] })
 
   // 刷新恢复：记忆模式下从 localStorage 读上次会话，拉历史回填；
   // 404（会话已删）静默回空态并清除记录；其他失败也不打断首屏。

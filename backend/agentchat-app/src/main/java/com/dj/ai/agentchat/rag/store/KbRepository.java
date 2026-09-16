@@ -52,10 +52,12 @@ public class KbRepository {
             """;
 
     /**
-     * 迭代10 过滤检索 SQL：doc 维 prefilter（project 等值；tags `?|` 任一命中）。
+     * 迭代10 过滤检索 SQL：doc 维 prefilter（projects 集合任一命中；tags `?|` 任一命中）。
+     * 迭代11：project 等值升级为 projects `= ANY(string_to_array(?))`——项目多选 OR 语义，
+     * 与标签同套逗号拼接传参（元素经 KbMetaValidator 禁逗号，安全）。
      * 注意 `??|` 双写：pgjdbc 把单个 ? 解析为占位符，双写转义为字面操作符
      * （驱动层转换，GIN 索引语义不变）——冒烟实证单写会 500。
-     * 所有可空参数显式 `?::varchar/?::text`：Java 传 null 时驱动按 unspecified
+     * 所有可空参数显式 `?::text`：Java 传 null 时驱动按 unspecified
      * OID 上报，PG 在 `? IS NULL`/操作符上下文不做类型推断（could not determine
      * data type of parameter）——冒烟实证。
      */
@@ -63,7 +65,7 @@ public class KbRepository {
             SELECT file_name, content, 1 - (embedding <=> ?::vector) AS score
               FROM rag_chunk
              WHERE doc_id IN (SELECT id FROM rag_document
-                               WHERE (?::varchar IS NULL OR project = ?::varchar)
+                               WHERE (?::text IS NULL OR project = ANY(string_to_array(?::text, ',')))
                                  AND (?::text IS NULL OR tags ??| string_to_array(?::text, ',')))
              ORDER BY embedding <=> ?::vector
              LIMIT ?
@@ -250,18 +252,20 @@ public class KbRepository {
     }
 
     /**
-     * 维度过滤检索（迭代10）：project/tags 任一非空走过滤 SQL（doc 维 prefilter，
-     * tags OR 语义）；两者全空委托 {@link #search(float[], int)}（原始 SQL 逐字节回归）。
+     * 维度过滤检索（迭代10；迭代11 项目多选）：projects/tags 任一非空走过滤 SQL
+     * （doc 维 prefilter，两维各自 OR、之间 AND）；两者全空委托
+     * {@link #search(float[], int)}（原始 SQL 逐字节回归）。
      */
     public List<RagChunkView> search(float[] queryVector, int topK,
-                                     String project, List<String> tags) {
-        if ((project == null || project.isBlank()) && (tags == null || tags.isEmpty())) {
+                                     List<String> projects, List<String> tags) {
+        if ((projects == null || projects.isEmpty()) && (tags == null || tags.isEmpty())) {
             return search(queryVector, topK);
         }
         String vectorLiteral = formatVectorLiteral(queryVector);
+        String projectsJoined = projects == null || projects.isEmpty() ? null : String.join(",", projects);
         String tagsJoined = tags == null || tags.isEmpty() ? null : String.join(",", tags);
         return jdbc.query(SEARCH_SQL_FILTERED, CHUNK_VIEW_ROW_MAPPER,
-                vectorLiteral, project, project, tagsJoined, tagsJoined, vectorLiteral, topK);
+                vectorLiteral, projectsJoined, projectsJoined, tagsJoined, tagsJoined, vectorLiteral, topK);
     }
 
     public long countDocuments() {

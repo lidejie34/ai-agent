@@ -56,6 +56,26 @@ public final class KbMetaValidator {
     }
 
     /**
+     * 规整项目集合（迭代11 聊天页项目多选）：null → 空列表；逐元素 trim、去空、
+     * 去重（保序），每个元素按 {@link #normalizeProject} 同口径校验
+     * （长度/字符越界 → KbMetaInvalidException(project)）。
+     * 元素已禁逗号，检索 SQL 可安全 string_to_array 拼接（同标签）。
+     */
+    public static List<String> normalizeProjects(Collection<String> raw, int maxLength) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> cleaned = new LinkedHashSet<>();
+        for (String item : raw) {
+            String v = normalizeProject(item, maxLength);
+            if (v != null) {
+                cleaned.add(v);
+            }
+        }
+        return List.copyOf(cleaned);
+    }
+
+    /**
      * 规整标签集合：null → 空列表；逐元素 trim、去空、去重（保序）；
      * 数量/长度/字符越界 → KbMetaInvalidException(非 project)。
      */

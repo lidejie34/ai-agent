@@ -177,25 +177,29 @@ describe('App 集成（AC-17~29）', () => {
     expect(sw).toBeChecked()
   })
 
-  it('知识库维度可用：选择器渲染；选项目/标签后发送，请求体带 kbProject/kbTags', async () => {
+  it('知识库维度可用：选择器渲染；选项目（多选）/标签后发送，请求体带 kbProjects/kbTags', async () => {
     const { fetchFn } = setupApp()
     // 在默认路由上叠加 dimensions 路由（setupApp 默认 404 → 选择器隐藏）
     const original = fetchFn.getMockImplementation()!
     fetchFn.mockImplementation(async (url: string, init?: RequestInit) => {
       if (String(url).includes('/api/kb/dimensions')) {
-        return json({ projects: ['订单域'], tags: ['售后', '退货'] })
+        return json({ projects: ['订单域', '物流域'], tags: ['售后', '退货'] })
       }
       return original(url, init)
     })
     render(<App />)
 
     const bar = await screen.findByTestId('kb-filter-bar')
-    // 项目单选：打开下拉选「订单域」
+    // 项目多选（迭代11）：打开下拉连选「订单域」「物流域」
     const projectSel = screen.getByTestId('chat-kb-project')
     fireEvent.mouseDown(projectSel.querySelector('.ant-select-selector') as HTMLElement)
     await userEvent.click(
       await screen.findByText('订单域', { selector: '.ant-select-item-option-content' }),
     )
+    await userEvent.click(
+      await screen.findByText('物流域', { selector: '.ant-select-item-option-content' }),
+    )
+    await userEvent.keyboard('{Escape}')
     // 标签多选：选「售后」
     const tagsSel = screen.getByTestId('chat-kb-tags')
     fireEvent.mouseDown(tagsSel.querySelector('.ant-select-selector') as HTMLElement)
@@ -211,7 +215,7 @@ describe('App 集成（AC-17~29）', () => {
       const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
       expect(streams).toHaveLength(1)
       const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
-      expect(body.kbProject).toBe('订单域')
+      expect(body.kbProjects).toEqual(['订单域', '物流域'])
       expect(body.kbTags).toEqual(['售后'])
     })
   })
@@ -230,7 +234,7 @@ describe('App 集成（AC-17~29）', () => {
       const streams = fetchFn.mock.calls.filter(([u]) => String(u).includes('/api/chat/stream'))
       expect(streams).toHaveLength(1)
       const body = JSON.parse(String((streams[0][1] as RequestInit).body)) as Record<string, unknown>
-      expect(body).not.toHaveProperty('kbProject')
+      expect(body).not.toHaveProperty('kbProjects')
       expect(body).not.toHaveProperty('kbTags')
     })
   })

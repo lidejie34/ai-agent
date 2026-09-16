@@ -36,6 +36,7 @@ import static org.mockito.Mockito.when;
  * 迭代10：ExecutorClient 知识库过滤单测——OrchInput 透传的 KbFilter 非空且 advisor
  * 在场时注入 RagAdvisor advisor param；null/空过滤不注入（请求形态与迭代9 逐字节一致）；
  * advisor 缺席时过滤静默忽略。附 OrchInput 兼容构造回归。
+ * 迭代11：项目多选——projects 列表注入、空集合缺省注入。
  */
 class ExecutorClientKbFilterTest {
 
@@ -81,7 +82,7 @@ class ExecutorClientKbFilterTest {
     @SuppressWarnings("unchecked")
     void kbFilterPresent_injectsAdvisorParams() {
         TaskOutcome o = client.execute(task, null, ctx(), 0,
-                new KbFilter("订单域", List.of("售后", "退货")));
+                new KbFilter(List.of("订单域", "物流域"), List.of("售后", "退货")));
 
         assertThat(o.ok()).isTrue();
         verify(spec).advisors(advisor);
@@ -91,7 +92,7 @@ class ExecutorClientKbFilterTest {
         ChatClient.AdvisorSpec advisorSpec = mock(ChatClient.AdvisorSpec.class);
         when(advisorSpec.param(anyString(), any())).thenReturn(advisorSpec);
         captor.getValue().accept(advisorSpec);
-        verify(advisorSpec).param(RagAdvisor.PARAM_KB_PROJECT, "订单域");
+        verify(advisorSpec).param(RagAdvisor.PARAM_KB_PROJECTS, List.of("订单域", "物流域"));
         verify(advisorSpec).param(RagAdvisor.PARAM_KB_TAGS, List.of("售后", "退货"));
     }
 
@@ -109,7 +110,7 @@ class ExecutorClientKbFilterTest {
     @SuppressWarnings("unchecked")
     void kbFilterEmpty_noParamInjection() {
         TaskOutcome o = client.execute(task, null, ctx(), 0,
-                new KbFilter(null, List.of()));
+                new KbFilter(List.of(), List.of()));
 
         assertThat(o.ok()).isTrue();
         verify(spec).advisors(advisor);
@@ -118,9 +119,9 @@ class ExecutorClientKbFilterTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void tagsOnlyFilter_skipsNullProjectParam() {
+    void tagsOnlyFilter_skipsEmptyProjectsParam() {
         TaskOutcome o = client.execute(task, null, ctx(), 0,
-                new KbFilter(null, List.of("承运")));
+                new KbFilter(List.of(), List.of("承运")));
 
         assertThat(o.ok()).isTrue();
         ArgumentCaptor<Consumer<ChatClient.AdvisorSpec>> captor =
@@ -129,7 +130,7 @@ class ExecutorClientKbFilterTest {
         ChatClient.AdvisorSpec advisorSpec = mock(ChatClient.AdvisorSpec.class);
         when(advisorSpec.param(anyString(), any())).thenReturn(advisorSpec);
         captor.getValue().accept(advisorSpec);
-        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_PROJECT), any());
+        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_PROJECTS), any());
         verify(advisorSpec).param(RagAdvisor.PARAM_KB_TAGS, List.of("承运"));
     }
 
@@ -139,7 +140,7 @@ class ExecutorClientKbFilterTest {
         when(advisorProvider.getIfAvailable()).thenReturn(null);
 
         TaskOutcome o = client.execute(task, null, ctx(), 0,
-                new KbFilter("订单域", List.of("售后")));
+                new KbFilter(List.of("订单域"), List.of("售后")));
 
         assertThat(o.ok()).isTrue();
         verify(spec, never()).advisors(any(RagAdvisor.class));

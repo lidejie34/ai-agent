@@ -479,9 +479,10 @@ public class ChatService {
             // 迭代10：携带维度过滤时注入 advisor param（不过滤不注入——请求形态与迭代9 逐字节一致）
             if (kbFilter != null && kbFilter.present()) {
                 spec.advisors(a -> {
-                    // Spring AI Assert.notNull(value)：project 为 null 只能缺省注入（冒烟实证 NPE）
-                    if (kbFilter.project() != null) {
-                        a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project());
+                    // 迭代11：projects 空集合缺省注入（与迭代10 null project 缺省同纪律，
+                    // 请求形态保持最小差异；Assert.notNull 不拒空 List）
+                    if (!kbFilter.projects().isEmpty()) {
+                        a.param(RagAdvisor.PARAM_KB_PROJECTS, kbFilter.projects());
                     }
                     a.param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags());
                 });
@@ -716,18 +717,19 @@ public class ChatService {
     }
 
     /**
-     * 知识库检索过滤校验（迭代10）：kbProject/kbTags 任一在场即经 KbMetaValidator 白名单
-     * 校验（上限取 RagProperties.Meta，RAG 关闭时 bean 缺席用默认实例上限）；
-     * 非法 → InvalidKbFilterException（400 KB_INVALID_FILTER），不进模型调用。
+     * 知识库检索过滤校验（迭代10；迭代11 项目多选）：kbProjects/kbTags 任一在场即经
+     * KbMetaValidator 白名单校验（上限取 RagProperties.Meta，RAG 关闭时 bean 缺席
+     * 用默认实例上限）；非法 → InvalidKbFilterException（400 KB_INVALID_FILTER），
+     * 不进模型调用。
      */
     private void validateKbFilter(ChatRequest request) {
-        if ((request.kbProject() == null || request.kbProject().isBlank())
+        if ((request.kbProjects() == null || request.kbProjects().isEmpty())
                 && (request.kbTags() == null || request.kbTags().isEmpty())) {
             return;
         }
         RagProperties.Meta meta = ragMeta();
         try {
-            KbMetaValidator.normalizeProject(request.kbProject(), meta.getMaxProjectLength());
+            KbMetaValidator.normalizeProjects(request.kbProjects(), meta.getMaxProjectLength());
             KbMetaValidator.normalizeTags(request.kbTags(), meta.getMaxTags(), meta.getMaxTagLength());
         } catch (KbMetaValidator.KbMetaInvalidException e) {
             throw new InvalidKbFilterException("知识库过滤参数非法：" + e.getMessage());
@@ -735,22 +737,22 @@ public class ChatService {
     }
 
     /**
-     * 规整请求级知识库过滤（迭代10）：validateKbFilter 已保证不再抛；两维全空 → null
-     * （下游不注入 advisor param）。RAG 关闭（advisor 缺席）而请求带过滤 → warn 忽略，
-     * 与 sdd:true 遇开关关闭同纪律。
+     * 规整请求级知识库过滤（迭代10；迭代11 项目多选）：validateKbFilter 已保证不再抛；
+     * 两维全空 → null（下游不注入 advisor param）。RAG 关闭（advisor 缺席）而请求带过滤
+     * → warn 忽略，与 sdd:true 遇开关关闭同纪律。
      */
     private KbFilter resolveKbFilter(ChatRequest request) {
-        if ((request.kbProject() == null || request.kbProject().isBlank())
+        if ((request.kbProjects() == null || request.kbProjects().isEmpty())
                 && (request.kbTags() == null || request.kbTags().isEmpty())) {
             return null;
         }
         RagProperties.Meta meta = ragMeta();
         KbFilter filter = new KbFilter(
-                KbMetaValidator.normalizeProject(request.kbProject(), meta.getMaxProjectLength()),
+                KbMetaValidator.normalizeProjects(request.kbProjects(), meta.getMaxProjectLength()),
                 KbMetaValidator.normalizeTags(request.kbTags(), meta.getMaxTags(), meta.getMaxTagLength()));
         if (currentRagAdvisor() == null) {
-            log.warn("app.rag.enabled=false，请求知识库过滤参数已忽略（project={}, tags={}）",
-                    filter.project(), filter.tags());
+            log.warn("app.rag.enabled=false，请求知识库过滤参数已忽略（projects={}, tags={}）",
+                    filter.projects(), filter.tags());
         }
         return filter;
     }

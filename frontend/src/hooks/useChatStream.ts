@@ -134,14 +134,14 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
   }, [])
 
   const send = useCallback(
-    async (text: string, kbFilter?: { project?: string; tags?: string[] }) => {
+    async (text: string, kbFilter?: { projects?: string[]; tags?: string[] }) => {
       const trimmed = text.trim()
       if (!trimmed) return // 空白拦截
       if (controllerRef.current) return // 流式中双保险拦截
 
       setLastError(null)
       const sid = sessionRef.current
-      const body: { message: string; sessionId?: string; kbProject?: string; kbTags?: string[] } =
+      const body: { message: string; sessionId?: string; kbProjects?: string[]; kbTags?: string[] } =
         { message: trimmed }
       if (sid) {
         body.sessionId = sid // 续接
@@ -149,9 +149,9 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         body.sessionId = '' // 新建
       }
       // 无状态：省略 sessionId 键
-      // 知识库维度过滤（迭代10）：全空省略两键，请求形态与未打标一致
-      if (kbFilter?.project) {
-        body.kbProject = kbFilter.project
+      // 知识库维度过滤（迭代10；迭代11 项目多选）：全空省略两键，请求形态与未打标一致
+      if (kbFilter?.projects && kbFilter.projects.length > 0) {
+        body.kbProjects = kbFilter.projects
       }
       if (kbFilter?.tags && kbFilter.tags.length > 0) {
         body.kbTags = kbFilter.tags

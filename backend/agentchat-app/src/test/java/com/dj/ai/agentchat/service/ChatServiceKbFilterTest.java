@@ -16,7 +16,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.function.Consumer;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -26,9 +25,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 迭代10：ChatService 知识库检索过滤单测——kbProject/kbTags 经 validate 校验
+ * 迭代10/11：ChatService 知识库检索过滤单测——kbProjects/kbTags 经 validate 校验
  * （非法 400 InvalidKbFilterException），合法时随 applyRagAdvisor 注入 advisor param；
  * 无过滤不注入（请求形态与迭代9 逐字节一致）；RAG 缺席时过滤 warn 忽略不报错。
+ * 迭代11：项目多选——kbProjects 列表注入、去重规整、空集合缺省注入。
  */
 class ChatServiceKbFilterTest {
 
@@ -59,22 +59,40 @@ class ChatServiceKbFilterTest {
                 new ChatService.FixedObjectProvider<>(advisor));
     }
 
-    @Test
     @SuppressWarnings("unchecked")
-    void sync_withFilter_injectsAdvisorParams() {
-        RagAdvisor advisor = mock(RagAdvisor.class);
-        ChatService service = serviceWithRag(advisor);
-
-        service.chat(new ChatRequest("售后政策", null, null, null, "订单域", List.of("售后", "退货")));
-
+    private ChatClient.AdvisorSpec captureAdvisorSpecConsumer() {
         org.mockito.ArgumentCaptor<Consumer<ChatClient.AdvisorSpec>> captor =
                 org.mockito.ArgumentCaptor.forClass(Consumer.class);
         verify(spec).advisors(captor.capture());
         ChatClient.AdvisorSpec advisorSpec = mock(ChatClient.AdvisorSpec.class);
         when(advisorSpec.param(any(String.class), any())).thenReturn(advisorSpec);
         captor.getValue().accept(advisorSpec);
-        verify(advisorSpec).param(RagAdvisor.PARAM_KB_PROJECT, "订单域");
+        return advisorSpec;
+    }
+
+    @Test
+    void sync_withFilter_injectsAdvisorParams() {
+        RagAdvisor advisor = mock(RagAdvisor.class);
+        ChatService service = serviceWithRag(advisor);
+
+        service.chat(new ChatRequest("售后政策", null, null, null,
+                List.of("订单域", "物流域"), List.of("售后", "退货")));
+
+        ChatClient.AdvisorSpec advisorSpec = captureAdvisorSpecConsumer();
+        verify(advisorSpec).param(RagAdvisor.PARAM_KB_PROJECTS, List.of("订单域", "物流域"));
         verify(advisorSpec).param(RagAdvisor.PARAM_KB_TAGS, List.of("售后", "退货"));
+    }
+
+    @Test
+    void sync_multiProjects_normalizedDedupBeforeInject() {
+        RagAdvisor advisor = mock(RagAdvisor.class);
+        ChatService service = serviceWithRag(advisor);
+
+        service.chat(new ChatRequest("售后政策", null, null, null,
+                List.of("订单域", " 订单域 ", "物流域"), null));
+
+        ChatClient.AdvisorSpec advisorSpec = captureAdvisorSpecConsumer();
+        verify(advisorSpec).param(RagAdvisor.PARAM_KB_PROJECTS, List.of("订单域", "物流域"));
     }
 
     @Test
@@ -103,21 +121,15 @@ class ChatServiceKbFilterTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void tagsOnlyFilter_skipsNullProjectParam() {
-        // Spring AI AdvisorSpec.param 断言 value 非空：project=null 时只能缺省注入（冒烟实证 NPE）
+    void tagsOnlyFilter_skipsEmptyProjectsParam() {
+        // projects 空集合缺省注入（与迭代10 null project 缺省同纪律）
         RagAdvisor advisor = mock(RagAdvisor.class);
         ChatService service = serviceWithRag(advisor);
 
         service.chat(new ChatRequest("承运规则", null, null, null, null, List.of("承运")));
 
-        org.mockito.ArgumentCaptor<Consumer<ChatClient.AdvisorSpec>> captor =
-                org.mockito.ArgumentCaptor.forClass(Consumer.class);
-        verify(spec).advisors(captor.capture());
-        ChatClient.AdvisorSpec advisorSpec = mock(ChatClient.AdvisorSpec.class);
-        when(advisorSpec.param(any(String.class), any())).thenReturn(advisorSpec);
-        captor.getValue().accept(advisorSpec);
-        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_PROJECT), any());
+        ChatClient.AdvisorSpec advisorSpec = captureAdvisorSpecConsumer();
+        verify(advisorSpec, never()).param(eq(RagAdvisor.PARAM_KB_PROJECTS), any());
         verify(advisorSpec).param(RagAdvisor.PARAM_KB_TAGS, List.of("承运"));
     }
 
@@ -127,7 +139,11 @@ class ChatServiceKbFilterTest {
         ChatService service = serviceWithRag(advisor);
 
         assertThatThrownBy(() -> service.chat(
-                new ChatRequest("问题", null, null, null, "含,逗号", null)))
+                new ChatRequest("问题", null, null, null, List.of("含,逗号"), null)))
+                .isInstanceOf(InvalidKbFilterException.class)
+                .hasMessageContaining("知识库过滤参数非法");
+        assertThatThrownBy(() -> service.chat(
+                new ChatRequest("问题", null, null, null, List.of("合法项目", "含,逗号"), null)))
                 .isInstanceOf(InvalidKbFilterException.class)
                 .hasMessageContaining("知识库过滤参数非法");
         assertThatThrownBy(() -> service.chat(
@@ -139,13 +155,14 @@ class ChatServiceKbFilterTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void filterWithRagAbsent_warnAndIgnore_noParamsInjected() {
         // RAG 关闭语义：advisor provider 为 null——过滤参数 warn 忽略，不报错、不挂载
         ChatService service = new ChatService(chatClient, "ark-test-key", "model",
                 3, Duration.ofMillis(10), Duration.ofMillis(100),
                 null, 20, true, null, null, null);
 
-        service.chat(new ChatRequest("问题", null, null, null, "订单域", null));
+        service.chat(new ChatRequest("问题", null, null, null, List.of("订单域"), null));
 
         verify(spec, never()).advisors(any(RagAdvisor.class));
         verify(spec, never()).advisors(any(Consumer.class));

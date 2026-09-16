@@ -87,7 +87,7 @@ class KbRepositoryMetaTest {
 
     @Test
     void search_unfiltered_fourArgDelegatesToLegacySqlText() {
-        repository.search(new float[]{0.1f}, 4, null, List.of());
+        repository.search(new float[]{0.1f}, 4, List.of(), List.of());
 
         // 无维度 → 迭代6 原始 SQL：无 WHERE、无 rag_document 子查询
         ArgumentCaptor<Object[]> params = ArgumentCaptor.forClass(Object[].class);
@@ -100,17 +100,18 @@ class KbRepositoryMetaTest {
     }
 
     @Test
-    void search_filteredByProjectAndTags_prefilterSqlAndParamOrder() {
-        repository.search(new float[]{0.1f}, 4, "订单域", List.of("售后", "退货"));
+    void search_filteredByProjectsAndTags_prefilterSqlAndParamOrder() {
+        // 迭代11：项目多选——projects 逗号拼接 ×2（= ANY(string_to_array)），tags 同前
+        repository.search(new float[]{0.1f}, 4, List.of("订单域", "物流域"), List.of("售后", "退货"));
 
         ArgumentCaptor<Object[]> params = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc).query(contains("doc_id IN (SELECT id FROM rag_document"),
                 any(org.springframework.jdbc.core.RowMapper.class), params.capture());
         Object[] args = params.getValue();
-        // 参数序：vector, project×2, tagsJoined×2, vector, topK
+        // 参数序：vector, projectsJoined×2, tagsJoined×2, vector, topK
         assertThat(args).hasSize(7);
-        assertThat(args[1]).isEqualTo("订单域");
-        assertThat(args[2]).isEqualTo("订单域");
+        assertThat(args[1]).isEqualTo("订单域,物流域");
+        assertThat(args[2]).isEqualTo("订单域,物流域");
         assertThat(args[3]).isEqualTo("售后,退货");
         assertThat(args[4]).isEqualTo("售后,退货");
         assertThat(args[6]).isEqualTo(4);
@@ -118,7 +119,7 @@ class KbRepositoryMetaTest {
 
     @Test
     void search_filteredByTagsOnly_projectParamsNull() {
-        repository.search(new float[]{0.1f}, 4, null, List.of("售后"));
+        repository.search(new float[]{0.1f}, 4, List.of(), List.of("售后"));
 
         ArgumentCaptor<Object[]> params = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc).query(contains("tags ??| string_to_array(?::text, ',')"),

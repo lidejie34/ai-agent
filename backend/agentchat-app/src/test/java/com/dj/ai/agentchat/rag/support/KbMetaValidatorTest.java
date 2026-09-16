@@ -106,4 +106,27 @@ class KbMetaValidatorTest {
         assertThat(KbMetaValidator.joinTags(List.of())).isNull();
         assertThat(KbMetaValidator.joinTags(List.of("a", "b"))).isEqualTo("a,b");
     }
+
+    @Test
+    void projects_nullOrEmpty_becomesEmptyList() {
+        assertThat(KbMetaValidator.normalizeProjects(null, 64)).isEmpty();
+        assertThat(KbMetaValidator.normalizeProjects(List.of(), 64)).isEmpty();
+    }
+
+    @Test
+    void projects_trimDropBlankDedupKeepOrder() {
+        assertThat(KbMetaValidator.normalizeProjects(
+                List.of(" 订单域 ", "物流域", "订单域", "  ", "客服域"), 64))
+                .containsExactly("订单域", "物流域", "客服域");
+    }
+
+    @Test
+    void projects_illegalElement_rejected_commaIncluded() {
+        assertThatThrownBy(() -> KbMetaValidator.normalizeProjects(List.of("合法域", "含,逗号"), 64))
+                .isInstanceOf(KbMetaValidator.KbMetaInvalidException.class)
+                .hasMessageContaining("仅支持");
+        assertThatThrownBy(() -> KbMetaValidator.normalizeProjects(List.of("项".repeat(65)), 64))
+                .isInstanceOf(KbMetaValidator.KbMetaInvalidException.class)
+                .hasMessageContaining("64");
+    }
 }

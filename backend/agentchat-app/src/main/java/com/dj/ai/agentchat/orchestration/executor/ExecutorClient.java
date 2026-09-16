@@ -149,9 +149,9 @@ public class ExecutorClient {
                     // 请求形态与迭代9 逐字节一致
                     if (kbFilter != null && kbFilter.present()) {
                         spec.advisors(a -> {
-                            // 同上：null project 只能缺省注入（Assert.notNull）
-                            if (kbFilter.project() != null) {
-                                a.param(RagAdvisor.PARAM_KB_PROJECT, kbFilter.project());
+                            // 迭代11：projects 空集合缺省注入（同 ChatService 纪律）
+                            if (!kbFilter.projects().isEmpty()) {
+                                a.param(RagAdvisor.PARAM_KB_PROJECTS, kbFilter.projects());
                             }
                             a.param(RagAdvisor.PARAM_KB_TAGS, kbFilter.tags());
                         });
