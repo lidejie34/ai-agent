@@ -25,17 +25,54 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessagePO> {
      * 故用 JOIN 派生表规避），外层取回 {@code id >= min_id} 的<b>全部角色</b>（含窗口内的
      * tool_evidence 证据行，证据不挤占对话窗口、随窗口自然淘汰）。无证据会话的所有行均在
      * 白名单内 → 结果集与旧 SQL 逐行一致（回归保证）。
+     *
+     * <p>迭代13（对话删除）：回放只取最近一次「清空上下文」标记点（role='context_reset'，
+     * 零 DDL 标记行）之后的消息——内层窗口子查询与外层取回统一加 {@code id > resetId}。
+     * 无标记会话 COALESCE=0 → {@code id > 0} 恒真，结果集与旧 SQL 逐行一致（回归保证）；
+     * 标记行本身天然被排除（任何标记 id ≤ 最新标记 id）。标记点之前的消息仍在库中
+     * 供界面展示，仅对模型不可见（FR-5「清空上下文但保留记录」）。
      */
     @Select("SELECT t.id, t.session_id, t.role, t.content, t.created_at FROM chat_message t "
             + "INNER JOIN ("
             + "SELECT MIN(w.id) AS min_id FROM ("
             + "SELECT id FROM chat_message "
             + "WHERE session_id = #{sessionId} AND role IN ('user','assistant','system') "
+            + "AND id > (SELECT COALESCE(MAX(r.id),0) FROM chat_message r "
+            + "WHERE r.session_id = #{sessionId} AND r.role = 'context_reset') "
             + "ORDER BY id DESC LIMIT #{n}"
             + ") w"
             + ") win ON t.session_id = #{sessionId} AND t.id >= win.min_id "
+            + "AND t.id > (SELECT COALESCE(MAX(r2.id),0) FROM chat_message r2 "
+            + "WHERE r2.session_id = #{sessionId} AND r2.role = 'context_reset') "
             + "ORDER BY t.id ASC")
     List<ChatMessagePO> selectRecent(@Param("sessionId") String sessionId, @Param("n") int n);
+
+    /**
+     * 该会话在 {@code afterId} 之后最近一条 user 消息的 id（迭代13 删单轮区间上界）；
+     * 无后继 user（锚点是最后一轮）返回 {@code null}。
+     */
+    @Select("SELECT MIN(id) FROM chat_message "
+            + "WHERE session_id = #{sessionId} AND role = 'user' AND id > #{afterId}")
+    Long selectNextUserId(@Param("sessionId") String sessionId, @Param("afterId") long afterId);
+
+    /**
+     * 删除该会话 {@code [fromId, toIdExclusive)} 区间内的消息（迭代13 删单轮）：
+     * 一跳覆盖 user + 区间内 tool_evidence + assistant；<b>跳过 context_reset 标记行</b>
+     * （记忆边界不随删除消失，防止已清空历史静默复活进模型上下文）。
+     */
+    @Delete("DELETE FROM chat_message WHERE session_id = #{sessionId} "
+            + "AND id >= #{fromId} AND id < #{toIdExclusive} AND role != 'context_reset'")
+    int deleteRange(@Param("sessionId") String sessionId,
+                    @Param("fromId") long fromId,
+                    @Param("toIdExclusive") long toIdExclusive);
+
+    /**
+     * 删除该会话 {@code fromId} 及之后的全部消息（迭代13 截断重问；删单轮锚点为最后
+     * 一轮时复用）；同样<b>跳过 context_reset 标记行</b>。
+     */
+    @Delete("DELETE FROM chat_message WHERE session_id = #{sessionId} "
+            + "AND id >= #{fromId} AND role != 'context_reset'")
+    int deleteFrom(@Param("sessionId") String sessionId, @Param("fromId") long fromId);
 
     /**
      * 清空某会话消息（ChatMemory.clear 契约实现；本期不对外暴露 HTTP，FR-19）。

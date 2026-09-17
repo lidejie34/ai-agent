@@ -1,5 +1,8 @@
 package com.dj.ai.agentchat.controller;
 
+import com.dj.ai.agentchat.dto.session.BatchSessionDeleteRequest;
+import com.dj.ai.agentchat.dto.session.BatchSessionDeleteResult;
+import com.dj.ai.agentchat.dto.session.ContextResetView;
 import com.dj.ai.agentchat.dto.session.RenameRequest;
 import com.dj.ai.agentchat.dto.session.SessionDeleteResult;
 import com.dj.ai.agentchat.dto.session.SessionMessageView;
@@ -13,9 +16,11 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -62,6 +67,34 @@ public class SessionController {
                                         @RequestBody(required = false) RenameRequest request) {
         String title = request == null ? null : request.title();
         return sessionService.renameSession(sessionId, title);
+    }
+
+    /** 删除单轮（迭代13 FR-1）：锚点须为 user 消息，成对删用户消息+AI 回复；
+     *  非 user 锚点 400，消息不存在/跨会话 404。 */
+    @DeleteMapping("/{sessionId}/messages/{messageId}")
+    public SessionDeleteResult deleteTurn(@PathVariable String sessionId,
+                                          @PathVariable long messageId) {
+        return sessionService.deleteTurn(sessionId, messageId);
+    }
+
+    /** 从指定消息起截断（迭代13 FR-2）：删除该条及之后全部消息（标记行保留）。 */
+    @DeleteMapping(value = "/{sessionId}/messages", params = "fromId")
+    public SessionDeleteResult truncateMessages(@PathVariable String sessionId,
+                                                @RequestParam long fromId) {
+        return sessionService.truncateMessages(sessionId, fromId);
+    }
+
+    /** 清空上下文但保留记录（迭代13 FR-5）：插 context_reset 标记行，返回标记视图。 */
+    @PostMapping("/{sessionId}/context/clear")
+    public ContextResetView clearContext(@PathVariable String sessionId) {
+        return sessionService.clearContext(sessionId);
+    }
+
+    /** 批量删除会话（迭代13 FR-3）：逐 id 汇报 deleted/notFound，notFound 不打断整批。 */
+    @PostMapping(value = "/batch-delete", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public BatchSessionDeleteResult batchDeleteSessions(@RequestBody(required = false)
+                                                        BatchSessionDeleteRequest request) {
+        return sessionService.batchDeleteSessions(request);
     }
 
     /** 读会话级范围配置（迭代12：知识库维度+工具/MCP 选择；行缺席=全默认视图）。 */

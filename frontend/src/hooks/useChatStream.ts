@@ -27,12 +27,25 @@ function uid(prefix: string): string {
 }
 
 function toChatMessage(view: SessionMessageView): ChatMessage {
+  // 迭代13：context_reset 标记 → 分隔线伪消息（MessageList 渲染分隔线，不进气泡）
+  if (view.role === 'context_reset') {
+    return {
+      id: `divider-${view.id}`,
+      role: 'user',
+      content: '',
+      createdAt: view.createdAt,
+      status: 'done',
+      backendId: view.id,
+      divider: true,
+    }
+  }
   return {
     id: uid('m'),
     role: view.role as ChatRole,
     content: view.content,
     createdAt: view.createdAt,
     status: 'done',
+    backendId: view.id,
   }
 }
 
@@ -249,6 +262,25 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     controllerRef.current = null
   }, [])
 
+  /** 迭代13：轮次结束后把库 id 对齐回填到直播消息——从尾向前按 role+content
+   *  双等匹配（防错误轮次错位赋值），遇不匹配即停（保守，宁可缺 id 不显示操作
+   *  按钮，切回会话即恢复）。分隔线伪消息跳过不参与对齐。 */
+  const attachBackendIds = useCallback((history: SessionMessageView[]) => {
+    setMessages((prev) => {
+      const rows = history.filter((v) => v.role === 'user' || v.role === 'assistant')
+      const next = [...prev]
+      let j = rows.length - 1
+      for (let i = next.length - 1; i >= 0 && j >= 0; i--) {
+        const m = next[i]
+        if (m.divider) continue
+        if (m.role !== rows[j].role || m.content !== rows[j].content) break
+        next[i] = { ...m, backendId: rows[j].id }
+        j -= 1
+      }
+      return next
+    })
+  }, [])
+
   /** 「新会话」：清空消息区与会话归属（随后发送按 remember 决定新建/无状态）。 */
   const startNew = useCallback(() => {
     setLastError(null)
@@ -273,6 +305,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     send,
     stop,
     showHistory,
+    attachBackendIds,
     startNew,
   }
 }

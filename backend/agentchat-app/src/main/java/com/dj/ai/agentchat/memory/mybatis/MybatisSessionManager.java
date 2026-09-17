@@ -105,6 +105,43 @@ public class MybatisSessionManager implements SessionManager {
     }
 
     @Override
+    public ChatMessagePO findMessage(String sessionId, long messageId) {
+        schemaInitializer.ensureSchema();
+        ChatMessagePO po = chatMessageMapper.selectById(messageId);
+        // 会话归属校验：跨会话 id 视为不存在（防越权删除他会话消息）
+        return po != null && sessionId.equals(po.getSessionId()) ? po : null;
+    }
+
+    @Override
+    public Long findNextUserId(String sessionId, long afterId) {
+        schemaInitializer.ensureSchema();
+        return chatMessageMapper.selectNextUserId(sessionId, afterId);
+    }
+
+    @Override
+    public int deleteMessageRange(String sessionId, long fromId, long toIdExclusive) {
+        schemaInitializer.ensureSchema();
+        return chatMessageMapper.deleteRange(sessionId, fromId, toIdExclusive);
+    }
+
+    @Override
+    public int deleteMessagesFrom(String sessionId, long fromId) {
+        schemaInitializer.ensureSchema();
+        return chatMessageMapper.deleteFrom(sessionId, fromId);
+    }
+
+    @Override
+    public ChatMessagePO insertContextReset(String sessionId) {
+        schemaInitializer.ensureSchema();
+        ChatMessagePO marker = new ChatMessagePO();
+        marker.setSessionId(sessionId);
+        marker.setRole("context_reset");
+        marker.setContent("");
+        chatMessageMapper.insert(marker); // IdType.AUTO 回填 id
+        return chatMessageMapper.selectById(marker.getId());
+    }
+
+    @Override
     public ChatSessionScopePO findScope(String sessionId) {
         schemaInitializer.ensureSchema();
         return chatSessionScopeMapper == null ? null : chatSessionScopeMapper.selectById(sessionId);

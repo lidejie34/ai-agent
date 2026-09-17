@@ -1,15 +1,66 @@
-import { Tag } from 'antd'
+import { Button, Popconfirm, Tag } from 'antd'
 import MarkdownView from './MarkdownView'
 import PlanTaskBlocks from './PlanTaskBlocks'
 import ToolCallBlocks from './ToolCallBlocks'
 import { errorCodeToText } from '../utils/errors'
 import type { ChatMessage } from '../types'
 
-export default function MessageBubble({ message }: { message: ChatMessage }) {
+export interface MessageBubbleProps {
+  message: ChatMessage
+  /** 迭代13：删除单轮（父级仅在流式空闲时传入；缺席则不渲染操作按钮） */
+  onDeleteTurn?: (message: ChatMessage) => void
+  /** 迭代13：从该条起截断重问 */
+  onTruncate?: (message: ChatMessage) => void
+}
+
+export default function MessageBubble({ message, onDeleteTurn, onTruncate }: MessageBubbleProps) {
   const isUser = message.role === 'user'
+  // 消息级操作：仅 user 气泡 + 已持库 id（历史加载/轮次对齐后）+ 父级放行（非流式）
+  const showActions = isUser && message.backendId != null && (onDeleteTurn || onTruncate)
 
   return (
     <div className={`message-row ${isUser ? 'message-row-user' : 'message-row-assistant'}`}>
+      {showActions && (
+        <span className="msg-actions" data-testid={`msg-actions-${message.backendId}`}>
+          {onTruncate && (
+            <Popconfirm
+              title="从这条起截断重问？"
+              description="将删除该条及之后的全部消息（上下文清空点保留），内容回填输入框"
+              okText="截断"
+              cancelText="取消"
+              okButtonProps={{ danger: true, 'data-testid': `msg-truncate-confirm-${message.backendId}` } as never}
+              onConfirm={() => onTruncate(message)}
+            >
+              <Button
+                type="text"
+                size="small"
+                data-testid={`msg-truncate-${message.backendId}`}
+              >
+                截断重问
+              </Button>
+            </Popconfirm>
+          )}
+          {onDeleteTurn && (
+            <Popconfirm
+              title="删除本轮对话？"
+              description="将删除这条消息及其 AI 回复，不可恢复"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true, 'data-testid': `msg-delete-turn-confirm-${message.backendId}` } as never}
+              onConfirm={() => onDeleteTurn(message)}
+            >
+              <Button
+                type="text"
+                size="small"
+                danger
+                data-testid={`msg-delete-turn-${message.backendId}`}
+              >
+                删除本轮
+              </Button>
+            </Popconfirm>
+          )}
+        </span>
+      )}
       <div
         className={`message-bubble ${isUser ? 'bubble-user' : 'bubble-assistant'}`}
         data-testid="message-bubble"

@@ -72,6 +72,17 @@ export function useSessions() {
     setSessions((prev) => prev.filter((s) => s.sessionId !== id))
   }, [])
 
+  /** 批量删除（迭代13 FR-3）：deleted 本地移除 + 后台 refresh 兜底；结果逐 id 汇报。 */
+  const removeSessions = useCallback(
+    async (ids: string[]): Promise<sessionsApi.BatchSessionDeleteResult> => {
+      const result = await sessionsApi.batchDeleteSessions(ids)
+      const deleted = new Set(result.deleted)
+      setSessions((prev) => prev.filter((s) => !deleted.has(s.sessionId)))
+      return result
+    },
+    [],
+  )
+
   /** 重命名：前端先校验（空白/超长拦截，FR-16.5），PATCH 成功后本地更新。 */
   const renameSession = useCallback(
     async (id: string, rawTitle: string): Promise<void> => {
@@ -92,6 +103,7 @@ export function useSessions() {
     refresh,
     selectSession,
     removeSession,
+    removeSessions,
     renameSession,
   }
 }

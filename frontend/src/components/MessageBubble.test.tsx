@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import MessageBubble from './MessageBubble'
 import type { ApiError, ChatMessage, ToolCallInfo } from '../types'
 
@@ -128,5 +129,66 @@ describe('MessageBubble', () => {
     expect(screen.getByTestId('message-error')).toHaveTextContent(
       '会话记忆暂不可用，可关闭「记住本次对话」以无状态继续',
     )
+  })
+  // ---- 迭代13：消息级操作按钮渲染条件 ----
+
+  it('user 消息 + 库 id + 处理器 → 渲染「删除本轮/截断重问」操作', () => {
+    render(
+      <MessageBubble
+        message={msg({ role: 'user', content: '问题', backendId: 11 })}
+        onDeleteTurn={() => {}}
+        onTruncate={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('msg-actions-11')).toBeInTheDocument()
+    expect(screen.getByTestId('msg-delete-turn-11')).toBeInTheDocument()
+    expect(screen.getByTestId('msg-truncate-11')).toBeInTheDocument()
+  })
+
+  it('缺库 id（未对齐/无记忆模式）→ 即使有处理器也不渲染操作', () => {
+    render(
+      <MessageBubble
+        message={msg({ role: 'user', content: '问题' })}
+        onDeleteTurn={() => {}}
+        onTruncate={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId(/^msg-actions-/)).toBeNull()
+  })
+
+  it('assistant 消息即使有库 id 与处理器也不渲染操作（锚点仅 user）', () => {
+    render(
+      <MessageBubble
+        message={msg({ role: 'assistant', content: '回答', backendId: 12 })}
+        onDeleteTurn={() => {}}
+        onTruncate={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('msg-actions-12')).toBeNull()
+  })
+
+  it('父级不传处理器（流式中）→ 操作不渲染', () => {
+    render(<MessageBubble message={msg({ role: 'user', content: '问题', backendId: 11 })} />)
+    expect(screen.queryByTestId('msg-actions-11')).toBeNull()
+  })
+
+  it('删除本轮：Popconfirm 确认后以该消息回调 onDeleteTurn', async () => {
+    const onDeleteTurn = vi.fn()
+    const message = msg({ role: 'user', content: '问题', backendId: 11 })
+    render(<MessageBubble message={message} onDeleteTurn={onDeleteTurn} />)
+
+    await userEvent.click(screen.getByTestId('msg-delete-turn-11'))
+    await userEvent.click(await screen.findByTestId('msg-delete-turn-confirm-11'))
+    expect(onDeleteTurn).toHaveBeenCalledWith(message)
+  })
+
+  it('截断重问：Popconfirm 确认后以该消息回调 onTruncate', async () => {
+    const onTruncate = vi.fn()
+    const message = msg({ role: 'user', content: '问题', backendId: 11 })
+    render(<MessageBubble message={message} onTruncate={onTruncate} />)
+
+    await userEvent.click(screen.getByTestId('msg-truncate-11'))
+    await userEvent.click(await screen.findByTestId('msg-truncate-confirm-11'))
+    expect(onTruncate).toHaveBeenCalledWith(message)
   })
 })

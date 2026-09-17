@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Switch, message } from 'antd'
+import { Button, Dropdown, Modal, Switch, message } from 'antd'
 import AppLayout from './components/AppLayout'
 import SessionSidebar from './components/SessionSidebar'
 import MessageList from './components/MessageList'
 import EmptyState from './components/EmptyState'
 import ChatInput from './components/ChatInput'
 import InlineError from './components/InlineError'
+import type { ChatMessage } from './types'
 import KbFilterBar, { type KbFilterValue } from './components/KbFilterBar'
 import ToolScopeBar, { type ToolScopeValue } from './components/ToolScopeBar'
-import { getSessionScope, putSessionScope, type SessionScope } from './api/sessions'
+import { clearContext, deleteTurn, getSessionScope, putSessionScope, truncateMessages, type SessionScope } from './api/sessions'
 import { useChatStream } from './hooks/useChatStream'
 import { useAvailableTools } from './hooks/useAvailableTools'
 import { useKbDimensions } from './hooks/useKbDimensions'
@@ -136,6 +137,24 @@ export default function App() {
     writeStoredSessionId(chat.remember ? chat.currentSessionId : null)
   }, [chat.currentSessionId, chat.remember])
 
+  // 迭代13：轮次结束（streaming → 非 streaming）后静默对齐库 id 到直播消息，
+  // 使刚完成的这轮也能立即使用删除/截断；失败静默（切回会话即有 id）。
+  const prevStatusRef = useRef(chat.status)
+  useEffect(() => {
+    const prev = prevStatusRef.current
+    prevStatusRef.current = chat.status
+    const sid = chat.currentSessionId
+    if (prev !== 'streaming' || chat.status === 'streaming' || !sid || !chat.remember) return
+    void sessions
+      .selectSession(sid)
+      .then((res) => {
+        if (res.kind === 'ok') chat.attachBackendIds(res.messages)
+      })
+      .catch(() => {})
+    // sessions/chat 引用均为稳定 useCallback；仅关心状态跃迁与会话归属
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.status, chat.currentSessionId, chat.remember])
+
   /** 切换历史会话；流式中阻止（FR-15.3）。 */
   const handleSelect = async (id: string) => {
     if (chat.isStreaming) {
@@ -184,6 +203,102 @@ export default function App() {
     }
   }
 
+  // ---- 迭代13：消息级删除/截断 + 清空上下文 + 批量删会话 ----
+
+  /** 静默重载当前会话历史（删除/截断/清空后权威态回灌，含分隔线）。 */
+  const reloadHistory = async (sid: string) => {
+    const res = await sessions.selectSession(sid)
+    if (res.kind === 'ok') {
+      chat.showHistory(sid, res.messages)
+    } else if (res.kind === 'notfound') {
+      chat.startNew()
+    }
+  }
+
+  /** 删除单轮（FR-1）：成对删用户消息 + AI 回复，物理删除不可恢复。 */
+  const handleDeleteTurn = async (m: ChatMessage) => {
+    const sid = chat.currentSessionId
+    if (!sid || m.backendId == null || chat.isStreaming) return
+    try {
+      await deleteTurn(sid, m.backendId)
+      await reloadHistory(sid)
+    } catch {
+      message.error('删除失败，请重试')
+    }
+  }
+
+  /** 截断重问（FR-2）：删该条及之后全部消息，内容回填输入框可编辑重发。 */
+  const handleTruncate = async (m: ChatMessage) => {
+    const sid = chat.currentSessionId
+    if (!sid || m.backendId == null || chat.isStreaming) return
+    try {
+      await truncateMessages(sid, m.backendId)
+      setDraft(m.content)
+      await reloadHistory(sid)
+    } catch {
+      message.error('截断失败，请重试')
+    }
+  }
+
+  /** 清空上下文但保留记录（FR-5）：标记点之后模型从零开始。 */
+  const handleClearContext = () => {
+    const sid = chat.currentSessionId
+    if (!sid || chat.isStreaming) return
+    Modal.confirm({
+      title: '清空上下文？',
+      content: '消息记录保留可见，但模型从下一轮起不再携带此前历史。',
+      okText: '清空',
+      cancelText: '取消',
+      okButtonProps: { danger: true, 'data-testid': 'clear-context-confirm' } as never,
+      onOk: async () => {
+        try {
+          await clearContext(sid)
+          await reloadHistory(sid)
+        } catch {
+          message.error('清空失败，请重试')
+        }
+      },
+    })
+  }
+
+  /** 主区删除当前会话（FR-4）：与侧边栏删除同语义同接口。 */
+  const handleDeleteCurrentSession = () => {
+    const sid = chat.currentSessionId
+    if (!sid || chat.isStreaming) return
+    Modal.confirm({
+      title: '删除当前会话？',
+      content: '将删除该会话及其全部消息，不可恢复。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true, 'data-testid': 'delete-current-confirm' } as never,
+      onOk: async () => {
+        try {
+          await sessions.removeSession(sid)
+          resetScope()
+          chat.startNew()
+        } catch {
+          message.error('会话删除失败，请重试')
+        }
+      },
+    })
+  }
+
+  /** 批量删除会话（FR-3）：逐 id 汇报；当前会话被删回空态；notFound 提示。 */
+  const handleBatchDelete = async (ids: string[]) => {
+    try {
+      const result = await sessions.removeSessions(ids)
+      if (result.notFound.length > 0) {
+        message.warning(`${result.notFound.length} 个会话已不存在，列表已刷新`)
+      }
+      if (chat.currentSessionId && result.deleted.includes(chat.currentSessionId)) {
+        resetScope()
+        chat.startNew()
+      }
+    } catch {
+      message.error('批量删除失败，请重试')
+    }
+  }
+
   const handleSend = (text: string) => {
     // 工具选择器隐藏（工具不可用）时不带范围键，请求形态与迭代11 逐字节一致
     void chat.send(text, kbFilter, toolOpts.available ? toolScope : undefined)
@@ -211,6 +326,8 @@ export default function App() {
           onDelete={handleDelete}
           onRename={handleRename}
           onRetry={sessions.refresh}
+          onBatchDelete={handleBatchDelete}
+          batchDisabled={chat.isStreaming}
         />
       }
       headerExtra={
@@ -229,6 +346,25 @@ export default function App() {
           >
             管理控制台
           </Button>
+          {/* 迭代13：危险入口收纳「⋯」（清空上下文 FR-5 / 删除当前会话 FR-4） */}
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'clear-context', label: '清空上下文', 'data-testid': 'menu-clear-context' },
+                { key: 'delete-session', label: '删除当前会话', danger: true, 'data-testid': 'menu-delete-session' },
+              ],
+              onClick: ({ key }) => {
+                if (key === 'clear-context') handleClearContext()
+                if (key === 'delete-session') handleDeleteCurrentSession()
+              },
+            }}
+            disabled={!chat.currentSessionId || chat.isStreaming}
+            trigger={['click']}
+          >
+            <Button size="small" data-testid="header-more-menu" aria-label="更多操作">
+              ⋯
+            </Button>
+          </Dropdown>
         </>
       }
     >
@@ -238,7 +374,11 @@ export default function App() {
             <EmptyState onPick={handlePickExample} />
           </div>
         ) : (
-          <MessageList messages={chat.messages} />
+          <MessageList
+            messages={chat.messages}
+            onDeleteTurn={chat.currentSessionId && !chat.isStreaming ? handleDeleteTurn : undefined}
+            onTruncate={chat.currentSessionId && !chat.isStreaming ? handleTruncate : undefined}
+          />
         )}
       </div>
       <InlineError error={chat.lastError} onClose={chat.dismissError} />

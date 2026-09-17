@@ -55,6 +55,11 @@ export interface ChatMessage {
   content: string
   createdAt?: string
   status?: MessageStatus
+  /** 库主键（迭代13）：历史加载/轮次结束后对齐回填；消息级删除/截断的稳定身份。
+   *  缺席（无记忆模式/对齐失败）→ 不渲染消息操作按钮 */
+  backendId?: number
+  /** 「上下文已清空」分隔线伪消息（迭代13）：role/content 无意义，MessageList 渲染分隔线 */
+  divider?: boolean
   /** 流失败时挂在助手消息上（服务端 ApiError 或网络/看门狗 NetworkError） */
   error?: ApiError | NetworkError
   /** 仅当轮流式助手消息持有（工具调用折叠块）；历史消息无此字段（AC-68） */
@@ -86,9 +91,11 @@ export interface SessionSummary {
   previewText: string | null
 }
 
-/** 历史消息视图（全文、升序）。 */
+/** 历史消息视图（全文、升序）。迭代13：带库 id（消息级操作锚点）；
+ *  role 含 'context_reset'——清空上下文标记，前端渲染为分隔线（content 恒空串）。 */
 export interface SessionMessageView {
-  role: ChatRole
+  id: number
+  role: ChatRole | 'context_reset'
   content: string
   createdAt: string
 }

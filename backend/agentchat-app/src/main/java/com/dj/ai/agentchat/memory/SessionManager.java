@@ -51,6 +51,36 @@ public interface SessionManager {
     ChatSessionPO rename(String sessionId, String title);
 
     /**
+     * 按库主键查消息并校验会话归属（迭代13）：不存在或不属于该会话返回 {@code null}
+     * （service 据此 404，防跨会话删除）。
+     */
+    ChatMessagePO findMessage(String sessionId, long messageId);
+
+    /**
+     * 该会话 {@code afterId} 之后最近一条 user 消息的 id（迭代13 删单轮区间上界）；
+     * 无后继 user 返回 {@code null}。
+     */
+    Long findNextUserId(String sessionId, long afterId);
+
+    /**
+     * 删除 {@code [fromId, toIdExclusive)} 区间内消息（迭代13 删单轮）；
+     * 跳过 context_reset 标记行。返回删除行数。
+     */
+    int deleteMessageRange(String sessionId, long fromId, long toIdExclusive);
+
+    /**
+     * 删除 {@code fromId} 及之后全部消息（迭代13 截断重问）；跳过 context_reset 标记行。
+     * 返回删除行数。
+     */
+    int deleteMessagesFrom(String sessionId, long fromId);
+
+    /**
+     * 插入「清空上下文」标记行（迭代13 FR-5，role='context_reset'，零 DDL）；
+     * 返回含自增 id 与 created_at 的完整行。
+     */
+    ChatMessagePO insertContextReset(String sessionId);
+
+    /**
      * 查会话级范围配置（迭代12）：行缺席返回 {@code null}（= 从未配置 = 全默认）。
      */
     ChatSessionScopePO findScope(String sessionId);

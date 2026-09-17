@@ -49,7 +49,16 @@ function setupApp(opts: SetupOpts = {}) {
       })
       return sse.response
     }
+    if (url.includes('/context/clear')) {
+      return json({ id: 900, createdAt: '2026-09-17 10:00:00' })
+    }
+    if (url.includes('/batch-delete')) {
+      const body = init?.body ? (JSON.parse(String(init.body)) as { ids: string[] }) : { ids: [] }
+      return json({ deleted: body.ids, notFound: [] })
+    }
     if (url.includes('/messages')) {
+      // 迭代13：DELETE（删单轮 /messages/{id}、截断 /messages?fromId=）与 GET 历史区分
+      if (method === 'DELETE') return json({ deleted: true })
       return opts.messagesResponse ? opts.messagesResponse() : json([])
     }
     if (url.includes('/api/sessions')) {
@@ -713,5 +722,231 @@ describe('App 集成（AC-17~29）', () => {
     expect(screen.getByTestId('chat-tool-enabled')).not.toBeChecked()
     expect(screen.queryByTestId('chat-tool-names')).toBeNull()
     expect(screen.queryByTestId('chat-mcp-servers')).toBeNull()
+  })
+})
+
+// ---------- 迭代13：消息级删除/截断 + 清空上下文 + 批量删会话 ----------
+
+/** 历史消息视图构造（迭代13：带库 id；role 可 context_reset）。 */
+function msgView(id: number, role: 'user' | 'assistant' | 'context_reset', content: string) {
+  return { id, role, content, createdAt: '2026-09-17 10:00:00' }
+}
+
+describe('App 集成（迭代13：对话删除 + 上下文删除）', () => {
+  it('删除本轮：气泡操作 → Popconfirm → DELETE /messages/{id} → 历史重载', async () => {
+    let historyCalls = 0
+    const { fetchFn } = setupApp({
+      initialSessions: [sessionSummary()],
+      messagesResponse: () => {
+        historyCalls += 1
+        return historyCalls === 1
+          ? json([msgView(11, 'user', '第一轮问题'), msgView(12, 'assistant', '第一轮回答')])
+          : json([])
+      },
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    expect(await screen.findByText('第一轮问题')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('msg-delete-turn-11'))
+    await userEvent.click(await screen.findByTestId('msg-delete-turn-confirm-11'))
+
+    await waitFor(() =>
+      expect(
+        fetchFn.mock.calls.some(
+          ([u, i]) =>
+            String(u).includes(`/api/sessions/${SID}/messages/11`) &&
+            (i as RequestInit | undefined)?.method === 'DELETE',
+        ),
+      ).toBe(true),
+    )
+    // 删除后重载历史（第二次 GET /messages）→ 列表清空回空态
+    await waitFor(() => expect(screen.queryByText('第一轮问题')).toBeNull())
+  })
+
+  it('截断重问：DELETE ?fromId= 正确 + 被截内容回填输入框', async () => {
+    let historyCalls = 0
+    const { fetchFn } = setupApp({
+      initialSessions: [sessionSummary()],
+      messagesResponse: () => {
+        historyCalls += 1
+        return historyCalls === 1
+          ? json([
+              msgView(11, 'user', '保留的问题'),
+              msgView(12, 'assistant', '保留的回答'),
+              msgView(13, 'user', '要重问的问题'),
+              msgView(14, 'assistant', '旧回答'),
+            ])
+          : json([
+              msgView(11, 'user', '保留的问题'),
+              msgView(12, 'assistant', '保留的回答'),
+            ])
+      },
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    expect(await screen.findByText('要重问的问题')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('msg-truncate-13'))
+    await userEvent.click(await screen.findByTestId('msg-truncate-confirm-13'))
+
+    await waitFor(() =>
+      expect(
+        fetchFn.mock.calls.some(
+          ([u, i]) =>
+            String(u).includes(`/api/sessions/${SID}/messages?fromId=13`) &&
+            (i as RequestInit | undefined)?.method === 'DELETE',
+        ),
+      ).toBe(true),
+    )
+    // 被截消息内容回填输入框；历史重载后旧轮消失
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('要重问的问题')
+    await waitFor(() => expect(screen.queryByText('旧回答')).toBeNull())
+  })
+
+  it('分隔线：context_reset 标记渲染为「上下文已清空」分隔线且无操作按钮', async () => {
+    setupApp({
+      initialSessions: [sessionSummary()],
+      messagesResponse: () =>
+        json([
+          msgView(11, 'user', '标记前的问题'),
+          msgView(50, 'context_reset', ''),
+          msgView(51, 'user', '标记后的问题'),
+        ]),
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+
+    expect(await screen.findByTestId('context-divider')).toHaveTextContent(
+      '上下文已清空 · 以上历史不再携带',
+    )
+    expect(screen.getByText('标记前的问题')).toBeInTheDocument()
+    // 标记前后消息照常渲染且都带操作按钮；分隔线本身无操作
+    expect(screen.getByTestId('msg-actions-11')).toBeInTheDocument()
+    expect(screen.getByTestId('msg-actions-51')).toBeInTheDocument()
+    expect(screen.queryByTestId('msg-actions-50')).toBeNull()
+  })
+
+  it('清空上下文：顶栏 ⋯ → 清空上下文 → Modal 确认 → POST context/clear', async () => {
+    const { fetchFn } = setupApp({
+      initialSessions: [sessionSummary()],
+      messagesResponse: () => json([msgView(11, 'user', '问题'), msgView(12, 'assistant', '回答')]),
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await screen.findByText('问题')
+
+    await userEvent.click(screen.getByTestId('header-more-menu'))
+    await userEvent.click(await screen.findByText('清空上下文'))
+    await userEvent.click(await screen.findByTestId('clear-context-confirm'))
+
+    await waitFor(() =>
+      expect(
+        fetchFn.mock.calls.some(
+          ([u, i]) =>
+            String(u).includes(`/api/sessions/${SID}/context/clear`) &&
+            (i as RequestInit | undefined)?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('删除当前会话：顶栏 ⋯ → 删除当前会话 → Modal 确认 → DELETE + 回空态', async () => {
+    const { fetchFn } = setupApp({
+      initialSessions: [sessionSummary()],
+      messagesResponse: () => json([msgView(11, 'user', '问题')]),
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await screen.findByText('问题')
+
+    await userEvent.click(screen.getByTestId('header-more-menu'))
+    await userEvent.click(await screen.findByText('删除当前会话'))
+    await userEvent.click(await screen.findByTestId('delete-current-confirm'))
+
+    await waitFor(() =>
+      expect(
+        fetchFn.mock.calls.some(
+          ([u, i]) =>
+            String(u).endsWith(`/api/sessions/${SID}`) &&
+            (i as RequestInit | undefined)?.method === 'DELETE',
+        ),
+      ).toBe(true),
+    )
+    expect(await screen.findByTestId('empty-state')).toBeInTheDocument()
+  })
+
+  it('批量删除：管理模式勾选两个 → POST batch-delete → 列表移除 + 当前被删回空态', async () => {
+    const SID2 = '223e4567-e89b-12d3-a456-426614174001'
+    const { fetchFn } = setupApp({
+      initialSessions: [
+        sessionSummary(),
+        sessionSummary({ sessionId: SID2, title: '第二个会话' }),
+      ],
+      messagesResponse: () => json([msgView(11, 'user', '问题')]),
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await screen.findByText('问题')
+
+    await userEvent.click(screen.getByTestId('sidebar-batch-toggle'))
+    await userEvent.click(screen.getByTestId(`batch-check-${SID}`))
+    await userEvent.click(screen.getByTestId(`batch-check-${SID2}`))
+    expect(screen.getByTestId('sidebar-batch-count')).toHaveTextContent('已选 2 项')
+
+    await userEvent.click(screen.getByTestId('batch-delete-btn'))
+    await userEvent.click(await screen.findByTestId('batch-delete-confirm'))
+
+    await waitFor(() =>
+      expect(
+        fetchFn.mock.calls.some(([u, i]) => {
+          if (!String(u).includes('/api/sessions/batch-delete')) return false
+          const body = JSON.parse(String((i as RequestInit | undefined)?.body)) as { ids: string[] }
+          return body.ids.includes(SID) && body.ids.includes(SID2)
+        }),
+      ).toBe(true),
+    )
+    // 两项从列表移除；当前会话（SID）被删 → 主区回空态
+    await waitFor(() => expect(screen.queryByTestId(`session-item-${SID}`)).toBeNull())
+    expect(screen.queryByTestId(`session-item-${SID2}`)).toBeNull()
+    expect(await screen.findByTestId('empty-state')).toBeInTheDocument()
+  })
+
+  it('流式中操作按钮不渲染（NFR-5）；轮次结束后库 id 对齐回填、按钮出现', async () => {
+    let historyCalls = 0
+    const { sse, fetchFn } = setupApp({
+      initialSessions: [sessionSummary()],
+      messagesResponse: () => {
+        historyCalls += 1
+        if (historyCalls === 1) return json([]) // 选中会话：空历史
+        // 轮次结束后对齐：返回持久化的本轮（id 101/102）
+        return json([msgView(101, 'user', '你好'), msgView(102, 'assistant', '你好呀')])
+      },
+    })
+    render(<App />)
+    await screen.findByTestId(`session-item-${SID}`)
+    await userEvent.click(screen.getByTestId(`session-select-${SID}`))
+    await waitFor(() =>
+      expect(fetchFn.mock.calls.some(([u]) => String(u).includes('/messages'))).toBe(true),
+    )
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '你好' } })
+    await userEvent.click(screen.getByTestId('chat-send'))
+    await screen.findByText('你好')
+    // 流式中：无操作按钮（父级不传处理器）
+    expect(screen.queryByTestId('msg-actions-101')).toBeNull()
+
+    await act(async () => {
+      sse.push(encodeSse.chunk('你好呀'))
+      sse.push(encodeSse.done())
+    })
+    // 轮次完成 → 静默 GET 历史 → 库 id 对齐 → 本轮用户消息出现操作按钮
+    expect(await screen.findByTestId('msg-actions-101')).toBeInTheDocument()
   })
 })

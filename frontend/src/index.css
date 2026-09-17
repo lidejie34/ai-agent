@@ -305,6 +305,75 @@ body {
   word-break: break-all;
 }
 
+/* 迭代13：消息级操作（删除本轮/截断重问）——hover/focus 显现，键盘可达 */
+.msg-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  align-self: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.message-row:hover .msg-actions,
+.message-row:focus-within .msg-actions {
+  opacity: 1;
+}
+
+.msg-actions .ant-btn {
+  font-size: 12px;
+  padding: 0 6px;
+  height: 24px;
+  color: #86909c;
+}
+
+.msg-actions .ant-btn:hover {
+  color: #1677ff;
+}
+
+.msg-actions .ant-btn-dangerous:hover {
+  color: #ff4d4f;
+}
+
+/* 迭代13：「上下文已清空」分隔线（FR-5 记忆边界可见） */
+.context-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 20px;
+  color: #86909c;
+  font-size: 12px;
+}
+
+.context-divider::before,
+.context-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed #d9dce1;
+}
+
+.context-divider-text {
+  flex-shrink: 0;
+}
+
+/* 迭代13：侧边栏批量管理操作条 */
+.sidebar-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(31, 35, 41, 0.05);
+}
+
+.sidebar-batch-count {
+  font-size: 12px;
+  color: #4e5969;
+}
+
 .back-to-bottom {
   position: absolute;
   bottom: 16px;

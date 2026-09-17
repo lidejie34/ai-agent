@@ -1,6 +1,8 @@
 package com.dj.ai.agentchat.controller;
 
 import com.dj.ai.agentchat.config.web.FastJsonWebConfig;
+import com.dj.ai.agentchat.dto.session.BatchSessionDeleteResult;
+import com.dj.ai.agentchat.dto.session.ContextResetView;
 import com.dj.ai.agentchat.dto.session.SessionDeleteResult;
 import com.dj.ai.agentchat.dto.session.SessionMessageView;
 import com.dj.ai.agentchat.dto.session.SessionSummary;
@@ -28,6 +30,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -132,8 +135,8 @@ class SessionControllerTest {
     @Test
     void messages_200_ascendingFullText() throws Exception {
         when(sessionService.listMessages(SID)).thenReturn(List.of(
-                new SessionMessageView("user", "你好", LocalDateTime.of(2026, 9, 3, 14, 0, 0)),
-                new SessionMessageView("assistant", "你好呀".repeat(50), LocalDateTime.of(2026, 9, 3, 14, 0, 1))));
+                new SessionMessageView(11L, "user", "你好", LocalDateTime.of(2026, 9, 3, 14, 0, 0)),
+                new SessionMessageView(12L, "assistant", "你好呀".repeat(50), LocalDateTime.of(2026, 9, 3, 14, 0, 1))));
 
         mockMvc.perform(get(SESSIONS + "/" + SID + "/messages"))
                 .andExpect(status().isOk())
@@ -191,6 +194,83 @@ class SessionControllerTest {
                 .thenThrow(new InvalidChatRequestException("sessionId 必须为服务端签发的 36 位会话 ID"));
 
         mockMvc.perform(delete(SESSIONS + "/abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+    }
+
+    // ---------- 迭代13：消息级删除/截断 + 清空上下文 + 批量删会话 ----------
+
+    @Test
+    void deleteTurn_200_deletedTrue() throws Exception {
+        when(sessionService.deleteTurn(SID, 10L)).thenReturn(SessionDeleteResult.OK);
+
+        mockMvc.perform(delete(SESSIONS + "/" + SID + "/messages/10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.deleted").value(true));
+    }
+
+    @Test
+    void deleteTurn_messageMissing_404() throws Exception {
+        when(sessionService.deleteTurn(SID, 99L))
+                .thenThrow(new SessionNotFoundException("消息不存在或已被删除"));
+
+        mockMvc.perform(delete(SESSIONS + "/" + SID + "/messages/99"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("SESSION_NOT_FOUND"));
+    }
+
+    @Test
+    void deleteTurn_nonUserAnchor_400() throws Exception {
+        when(sessionService.deleteTurn(SID, 12L))
+                .thenThrow(new InvalidChatRequestException("删除整轮须以用户消息为锚点"));
+
+        mockMvc.perform(delete(SESSIONS + "/" + SID + "/messages/12"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+    }
+
+    @Test
+    void truncate_200_deletedTrue() throws Exception {
+        when(sessionService.truncateMessages(SID, 10L)).thenReturn(SessionDeleteResult.OK);
+
+        mockMvc.perform(delete(SESSIONS + "/" + SID + "/messages?fromId=10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.deleted").value(true));
+    }
+
+    @Test
+    void clearContext_200_markerView() throws Exception {
+        when(sessionService.clearContext(SID)).thenReturn(
+                new ContextResetView(50L, LocalDateTime.of(2026, 9, 17, 10, 0, 0)));
+
+        mockMvc.perform(post(SESSIONS + "/" + SID + "/context/clear"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(50))
+                .andExpect(jsonPath("$.createdAt").exists());
+    }
+
+    @Test
+    void batchDelete_200_perIdResult() throws Exception {
+        String other = "223e4567-e89b-12d3-a456-426614174001";
+        when(sessionService.batchDeleteSessions(any())).thenReturn(
+                new BatchSessionDeleteResult(List.of(SID), List.of(other)));
+
+        mockMvc.perform(post(SESSIONS + "/batch-delete")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[\"" + SID + "\",\"" + other + "\"]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.deleted[0]").value(SID))
+                .andExpect(jsonPath("$.notFound[0]").value(other));
+    }
+
+    @Test
+    void batchDelete_emptyIds_400() throws Exception {
+        when(sessionService.batchDeleteSessions(any()))
+                .thenThrow(new InvalidChatRequestException("ids 不能为空"));
+
+        mockMvc.perform(post(SESSIONS + "/batch-delete")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[]}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
     }

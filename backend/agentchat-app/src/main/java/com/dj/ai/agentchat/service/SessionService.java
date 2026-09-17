@@ -1,6 +1,9 @@
 package com.dj.ai.agentchat.service;
 
 import com.alibaba.fastjson2.JSON;
+import com.dj.ai.agentchat.dto.session.BatchSessionDeleteRequest;
+import com.dj.ai.agentchat.dto.session.BatchSessionDeleteResult;
+import com.dj.ai.agentchat.dto.session.ContextResetView;
 import com.dj.ai.agentchat.dto.session.SessionDeleteResult;
 import com.dj.ai.agentchat.dto.session.SessionMessageView;
 import com.dj.ai.agentchat.dto.session.SessionScopeUpdate;
@@ -54,8 +57,14 @@ public class SessionService {
     private static final String SESSION_NOT_FOUND_MESSAGE = "会话不存在或已被删除";
     private static final String TITLE_BLANK_MESSAGE = "title 不能为空";
     private static final String TITLE_TOO_LONG_MESSAGE = "title 长度须为 1–200 字符";
-    /** 用户可见 role 白名单（迭代8）：tool_evidence 仅供模型回放，任何用户出口不可见。 */
-    private static final Set<String> VISIBLE_ROLES = Set.of("user", "assistant", "system");
+    /** 用户不可见 role（迭代8 tool_evidence；迭代13 改为排除式——context_reset 标记行
+     * 以下发为分隔线，user/assistant/system 之外仅证据行需要拦截）。 */
+    private static final Set<String> HIDDEN_ROLES = Set.of("tool_evidence");
+    /** 消息锚点角色限制（迭代13）：仅 user/assistant 可作为删除/截断锚点。 */
+    private static final Set<String> MESSAGE_ANCHOR_ROLES = Set.of("user", "assistant");
+    private static final String MESSAGE_NOT_FOUND_MESSAGE = "消息不存在或已被删除";
+    private static final String DELETE_TURN_ANCHOR_MESSAGE = "删除整轮须以用户消息为锚点";
+    private static final String BATCH_IDS_EMPTY_MESSAGE = "ids 不能为空";
 
     private final ObjectProvider<SessionManager> managerProvider;
     private final boolean memoryEnabled;
@@ -97,20 +106,116 @@ public class SessionService {
 
     /**
      * 某会话全量历史消息（id/时间升序、全文）。非法 UUID → 400；不存在 → 404。
+     * 迭代13：带库 id（消息级删除/截断锚点）；context_reset 标记行放行下发
+     * （前端渲染分隔线）；tool_evidence 证据行仍拦截不下发。
      */
     public List<SessionMessageView> listMessages(String sessionId) {
         SessionManager manager = requireManager();
         SessionIds.requireUuid(sessionId);
         findExisting(manager, sessionId);
         try {
-            // 迭代8：白名单过滤——证据行（tool_evidence）不下发前端；无证据会话结果逐字段不变
+            // 迭代8/13：排除式过滤——证据行（tool_evidence）不下发前端；标记行放行
             return manager.listMessagesAscending(sessionId).stream()
-                    .filter(po -> VISIBLE_ROLES.contains(po.getRole()))
-                    .map(po -> new SessionMessageView(po.getRole(), po.getContent(), po.getCreatedAt()))
+                    .filter(po -> !HIDDEN_ROLES.contains(po.getRole()))
+                    .map(po -> new SessionMessageView(po.getId(), po.getRole(), po.getContent(), po.getCreatedAt()))
                     .toList();
         } catch (DataAccessException e) {
             throw unavailable(e);
         }
+    }
+
+    /**
+     * 删除单轮（迭代13 FR-1）：锚点必须是该会话的 user 消息（否则 400）；
+     * 物理删除区间 [userId, 下一 user 消息 id)，覆盖 user + 区间内 tool_evidence
+     * + assistant；context_reset 标记行跳过不删（记忆边界不随删除消失）。
+     * 消息不存在/跨会话 → 404。
+     */
+    public SessionDeleteResult deleteTurn(String sessionId, long messageId) {
+        SessionManager manager = requireManager();
+        SessionIds.requireUuid(sessionId);
+        findExisting(manager, sessionId);
+        ChatMessagePO anchor = findMessageExisting(manager, sessionId, messageId);
+        if (!"user".equals(anchor.getRole())) {
+            throw new InvalidChatRequestException(DELETE_TURN_ANCHOR_MESSAGE);
+        }
+        try {
+            Long nextUserId = manager.findNextUserId(sessionId, messageId);
+            if (nextUserId == null) {
+                manager.deleteMessagesFrom(sessionId, messageId);
+            } else {
+                manager.deleteMessageRange(sessionId, messageId, nextUserId);
+            }
+            return SessionDeleteResult.OK;
+        } catch (DataAccessException e) {
+            throw unavailable(e);
+        }
+    }
+
+    /**
+     * 从指定消息起截断（迭代13 FR-2）：物理删除 fromId 及之后全部消息
+     * （标记行跳过）；锚点须为该会话 user/assistant 消息（防御 400）。消息不存在 → 404。
+     */
+    public SessionDeleteResult truncateMessages(String sessionId, long fromId) {
+        SessionManager manager = requireManager();
+        SessionIds.requireUuid(sessionId);
+        findExisting(manager, sessionId);
+        ChatMessagePO anchor = findMessageExisting(manager, sessionId, fromId);
+        if (!MESSAGE_ANCHOR_ROLES.contains(anchor.getRole())) {
+            throw new InvalidChatRequestException(DELETE_TURN_ANCHOR_MESSAGE);
+        }
+        try {
+            manager.deleteMessagesFrom(sessionId, fromId);
+            return SessionDeleteResult.OK;
+        } catch (DataAccessException e) {
+            throw unavailable(e);
+        }
+    }
+
+    /**
+     * 清空上下文但保留记录（迭代13 FR-5）：插入 context_reset 标记行，下一轮起
+     * 模型回放只取标记点之后；标记点之前的消息仍在库中、仍展示。可多次清空，
+     * 最近一次生效。返回标记视图供前端就地渲染分隔线。
+     */
+    public ContextResetView clearContext(String sessionId) {
+        SessionManager manager = requireManager();
+        SessionIds.requireUuid(sessionId);
+        findExisting(manager, sessionId);
+        try {
+            ChatMessagePO marker = manager.insertContextReset(sessionId);
+            log.info("会话上下文已清空（保留记录）: sessionId={}, markerId={}", sessionId, marker.getId());
+            return new ContextResetView(marker.getId(), marker.getCreatedAt());
+        } catch (DataAccessException e) {
+            throw unavailable(e);
+        }
+    }
+
+    /**
+     * 批量删除会话（迭代13 FR-3）：空数组 → 400；任一非法 UUID → 400（整请求拒绝，
+     * 与单删同口径）；逐个级联删除，不存在的 id 计入 notFound 不打断整批。
+     */
+    public BatchSessionDeleteResult batchDeleteSessions(BatchSessionDeleteRequest request) {
+        SessionManager manager = requireManager();
+        List<String> ids = request == null ? null : request.ids();
+        if (ids == null || ids.isEmpty()) {
+            throw new InvalidChatRequestException(BATCH_IDS_EMPTY_MESSAGE);
+        }
+        ids.forEach(SessionIds::requireUuid);
+        List<String> deleted = new ArrayList<>(ids.size());
+        List<String> notFound = new ArrayList<>();
+        for (String id : ids) {
+            try {
+                if (manager.findSession(id) == null) {
+                    notFound.add(id);
+                    continue;
+                }
+                manager.deleteCascade(id);
+                deleted.add(id);
+            } catch (DataAccessException e) {
+                throw unavailable(e);
+            }
+        }
+        log.info("批量删除会话完成: deleted={}, notFound={}", deleted.size(), notFound.size());
+        return new BatchSessionDeleteResult(List.copyOf(deleted), List.copyOf(notFound));
     }
 
     /**
@@ -233,6 +338,20 @@ public class SessionService {
         }
         if (po == null) {
             throw new SessionNotFoundException(SESSION_NOT_FOUND_MESSAGE);
+        }
+        return po;
+    }
+
+    /** 消息级操作锚点（迭代13）：不存在或不属于该会话 → 404（防跨会话越权）。 */
+    private ChatMessagePO findMessageExisting(SessionManager manager, String sessionId, long messageId) {
+        ChatMessagePO po;
+        try {
+            po = manager.findMessage(sessionId, messageId);
+        } catch (DataAccessException e) {
+            throw unavailable(e);
+        }
+        if (po == null) {
+            throw new SessionNotFoundException(MESSAGE_NOT_FOUND_MESSAGE);
         }
         return po;
     }
